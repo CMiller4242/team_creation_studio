@@ -190,7 +190,7 @@ python -m team_creator_studio project-info \
 
 ---
 
-## Milestone 3: Operation Management & Undo/Redo ✅ (Current)
+## Milestone 3: Operation Management & Undo/Redo ✅
 
 **Status:** Complete
 **Goal:** Add operation stack management, undo/redo, and project maintenance commands
@@ -371,51 +371,227 @@ python -m team_creator_studio reset-project --team "Team" --project "Logo"
 
 ---
 
-## Milestone 4: GUI Foundation
+## Milestone 4: GUI Foundation (Tkinter) ✅
 
-**Status:** Planned
-**Goal:** Create desktop application shell with basic UI
+**Status:** Complete
+**Goal:** Create desktop application with Tkinter that wraps existing core logic
 
 ### Deliverables
 
-- [ ] Main application window (PyQt6/PySide6)
-- [ ] Menu bar (File, Edit, View, Help)
-- [ ] Project browser sidebar
-- [ ] Central canvas area (blank for now)
-- [ ] Status bar
-- [ ] Settings dialog
-- [ ] Theme support (light/dark)
-- [ ] Recent projects list
+- [x] Service layer for shared logic between CLI and GUI
+- [x] Main application window (Tkinter)
+- [x] Project browser with teams and projects list
+- [x] Image viewer with scaling
+- [x] Toolbar (Import, Undo, Redo, Refresh, Export)
+- [x] Color Replace panel with HEX/RGB inputs
+- [x] Tolerance slider (0-100)
+- [x] Preserve alpha checkbox
+- [x] Scrollable lists with mouse wheel support
+- [x] Resize-safe layout
+- [x] Error handling with messageboxes
+- [x] Launch via `python -m team_creator_studio gui`
 
 ### Technical Stack
 
-- PyQt6 or PySide6
-- Qt Designer for UI layouts
-- QSettings for preferences
+- Tkinter (stdlib) for GUI
+- PIL.ImageTk for image display
+- Service layer pattern for code reuse
+- Existing core modules (no duplication)
 
-### UI Components
+### Architecture
 
+**Service Layer** (`core/services.py`):
+- `ProjectService` class with methods for all operations
+- Used by both CLI and GUI
+- Handles: import, color replace, undo, redo, export
+- Returns structured data or raises ValueError
+
+**UI Structure**:
 ```
-┌─────────────────────────────────────┐
-│ File  Edit  View  Help              │
-├──────┬──────────────────────────────┤
-│Teams │                              │
-│ └─🏢 │      Canvas Area             │
-│Proj. │      (Empty)                 │
-│ └─📁 │                              │
-│      │                              │
-│      │                              │
-├──────┴──────────────────────────────┤
-│ Status: Ready                       │
-└─────────────────────────────────────┘
+src/team_creator_studio/ui/
+├── __init__.py
+├── app.py                 # Main application controller
+├── theme.py              # Colors, fonts, spacing constants
+├── views/
+│   ├── project_browser.py   # Teams/projects list
+│   └── editor_view.py       # Image viewer + controls
+└── widgets/
+    └── scrollable_frame.py  # Reusable scroll container
+```
+
+**Layout**:
+```
+┌──────────────────────────────────────────────────┐
+│  Team Creation Studio                            │
+├──────────────┬───────────────────────────────────┤
+│ Project      │  [Import] [Undo] [Redo] [Refresh] │
+│ Browser      │  [Export]           Status: Ready  │
+│              ├───────────────────────────────────┤
+│ Teams:       │                                    │
+│ ┌──────────┐ │      Image Viewer                 │
+│ │ Team 1   │ │      (scaled to fit)              │
+│ │ Team 2   │ │                                    │
+│ └──────────┘ │                                    │
+│ [New Team]   │                                    │
+│              ├───────────────────────────────────┤
+│ Projects:    │  Color Replace Panel:              │
+│ ┌──────────┐ │  Target: HEX [      ] RGB [     ] │
+│ │ Project1 │ │  New:    HEX [      ] RGB [     ] │
+│ │ Project2 │ │  Tolerance: [======] [50]         │
+│ └──────────┘ │  [✓] Preserve alpha               │
+│ [New Project]│  [Apply Color Replace]            │
+│ [Open Proj]  │                                    │
+└──────────────┴───────────────────────────────────┘
+```
+
+### Commands
+
+**Launch GUI:**
+```bash
+python -m team_creator_studio gui
+```
+
+**CLI commands remain unchanged** - all Milestone 2-3 commands still work.
+
+### Key Features
+
+**Project Browser**
+- Lists all teams with metadata
+- Lists projects for selected team
+- Double-click to open project
+- New Team / New Project buttons
+- Scrollable lists with mouse wheel
+
+**Image Viewer**
+- Displays current composite image
+- Scales to fit canvas while preserving aspect ratio
+- Updates automatically after operations
+- Placeholder text when no image loaded
+
+**Color Replace Panel**
+- Target color: HEX or RGB input (HEX takes precedence)
+- New color: HEX or RGB input
+- Tolerance slider: 0-100 with synced numeric entry
+- Preserve alpha checkbox (default: checked)
+- Apply button calls existing core logic
+
+**Toolbar Operations**
+- Import Image: File dialog → calls `service.import_image()`
+- Undo: Calls `service.undo_operation()` → refreshes display
+- Redo: Calls `service.redo_operation()` → refreshes display
+- Refresh: Reloads composite image from disk
+- Export: Dialog for name → calls `service.export_project()`
+
+**Error Handling**
+- All errors shown in messagebox dialogs
+- Status label shows current operation
+- No raw tracebacks shown to user
+- Clear error messages for common issues
+
+### Technical Implementation
+
+**Service Layer Pattern:**
+```python
+# GUI calls service
+service = ProjectService()
+operation = service.apply_color_replace_operation(
+    team_name, project_name, target, new, tolerance, preserve_alpha
+)
+
+# Service uses existing core
+from team_creator_studio.ops.color_replace import apply_color_replace
+result_image = apply_color_replace(input_image, ...)
+```
+
+**Image Display:**
+```python
+# Load with PIL
+image = Image.open(image_path)
+
+# Scale to fit canvas
+scale = min(canvas_width/img_width, canvas_height/img_height, 1.0)
+resized = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+# Convert to PhotoImage and display
+photo = ImageTk.PhotoImage(resized)
+canvas.create_image(x, y, image=photo, anchor="center")
+```
+
+**Scroll Safety:**
+```python
+# Mouse wheel works on all platforms
+canvas.bind_all("<MouseWheel>", self._on_mousewheel)  # Windows/macOS
+canvas.bind_all("<Button-4>", self._on_mousewheel)    # Linux scroll up
+canvas.bind_all("<Button-5>", self._on_mousewheel)    # Linux scroll down
 ```
 
 ### Success Criteria
 
-- Application launches without errors
-- Can browse workspace structure
-- Can open projects (no editing yet)
-- Preferences save/load correctly
+- ✅ `python -m team_creator_studio gui` launches window
+- ✅ Teams/projects populate from workspace
+- ✅ Selecting project loads and displays composite
+- ✅ Import image updates project and viewer
+- ✅ Color replace applies and updates viewer + operations
+- ✅ Undo/redo works and viewer updates
+- ✅ Export writes PNG and shows success dialog
+- ✅ Resizing window works without breaking layout
+- ✅ Lists scroll with mouse wheel
+- ✅ No UI elements become unreachable
+- ✅ Runs on Windows without additional installs (beyond Pillow)
+- ✅ Error dialogs show clear messages
+- ✅ All padding/spacing values are integers
+- ✅ Font fallbacks work correctly
+
+### Common Issues & Fixes
+
+**Issue: ImageTk reference garbage collected**
+- Fix: Keep reference in instance variable (`self.photo_image = ...`)
+
+**Issue: Path not found errors**
+- Fix: Service layer normalizes all paths, validation runs on load
+
+**Issue: Missing composite after undo**
+- Fix: Renderer respects `active_op_index`, re-renders on undo/redo
+
+**Issue: Mouse wheel doesn't work**
+- Fix: Bind to `<MouseWheel>`, `<Button-4>`, `<Button-5>` for cross-platform
+
+**Issue: Window resize breaks layout**
+- Fix: Use `pack(fill="both", expand=True)` and `<Configure>` bindings
+
+### Example Workflow
+
+```bash
+# Launch GUI
+python -m team_creator_studio gui
+
+# In GUI:
+# 1. Select a team from the list (or create new team)
+# 2. Select a project (or create new project)
+# 3. Click "Import Image" to add an image
+# 4. Enter target color (e.g., #FFFFFF or 255,255,255)
+# 5. Enter new color (e.g., #00FF00 or 0,255,0)
+# 6. Adjust tolerance slider
+# 7. Click "Apply Color Replace"
+# 8. Use Undo/Redo to navigate history
+# 9. Click "Export" to save final image
+
+# CLI still works for automation:
+python -m team_creator_studio color-replace \
+  --team "Team Name" \
+  --project "Project Name" \
+  --target "#FFFFFF" \
+  --new "#00FF00" \
+  --tolerance 25
+```
+
+### Migration Notes
+
+- CLI commands unchanged - no breaking changes
+- Service layer is new but optional (CLI can continue using inline code)
+- GUI is additive - doesn't affect existing workflows
+- Same project format - no migration needed
+- Workspace structure unchanged
 
 ---
 
@@ -665,5 +841,5 @@ For milestone planning questions or suggestions, please:
 ---
 
 **Last Updated:** 2026-01-15
-**Current Milestone:** 3 (Complete - Operation Management & Undo/Redo)
-**Next Milestone:** 4 (GUI Foundation)
+**Current Milestone:** 4 (Complete - GUI Foundation with Tkinter)
+**Next Milestone:** 5 (Canvas & Layer System)

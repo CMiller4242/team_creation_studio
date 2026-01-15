@@ -824,6 +824,23 @@ def cmd_delete_op(args):
         return 1
 
 
+def cmd_gui(args):
+    """Launch the GUI application."""
+    try:
+        from team_creator_studio.ui.app import launch_gui
+        launch_gui()
+        return 0
+    except ImportError as e:
+        print(f"Error: Could not load GUI module: {e}", file=sys.stderr)
+        print("Make sure all dependencies are installed (Pillow, numpy)", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error launching GUI: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def cmd_reset_project(args):
     """Reset project to initial state, keeping only source uploads."""
     settings = Settings()
@@ -1176,6 +1193,13 @@ def main():
         help="Project name"
     )
     parser_reset.set_defaults(func=cmd_reset_project)
+
+    # gui command
+    parser_gui = subparsers.add_parser(
+        "gui",
+        help="Launch the GUI application"
+    )
+    parser_gui.set_defaults(func=cmd_gui)
 
     # Parse arguments
     args = parser.parse_args()
