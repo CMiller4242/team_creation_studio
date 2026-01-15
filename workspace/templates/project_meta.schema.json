@@ -1,0 +1,215 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://teamcreatorstudio.example.com/schemas/project_meta.schema.json",
+  "title": "Project Metadata",
+  "description": "Schema for Team Creation Studio project metadata",
+  "type": "object",
+  "required": [
+    "name",
+    "slug",
+    "team",
+    "created_at",
+    "updated_at",
+    "version",
+    "canvas",
+    "layers",
+    "palette_id"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable project name",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "slug": {
+      "type": "string",
+      "description": "Filesystem-safe project slug",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "team": {
+      "type": "object",
+      "description": "Parent team reference",
+      "required": ["name", "slug"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Team name"
+        },
+        "slug": {
+          "type": "string",
+          "description": "Team slug",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp (UTC) of creation",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp (UTC) of last update",
+      "format": "date-time"
+    },
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional project description",
+      "maxLength": 1000
+    },
+    "tags": {
+      "type": "array",
+      "description": "Searchable tags",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 50
+      },
+      "uniqueItems": true
+    },
+    "canvas": {
+      "type": "object",
+      "description": "Canvas dimensions and settings",
+      "required": ["width", "height", "background_color"],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "description": "Canvas width in pixels",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "height": {
+          "type": "integer",
+          "description": "Canvas height in pixels",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "background_color": {
+          "type": "string",
+          "description": "Hex color code",
+          "pattern": "^#[0-9A-Fa-f]{6}$"
+        }
+      }
+    },
+    "layers": {
+      "type": "array",
+      "description": "Layer definitions",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "type",
+          "visible",
+          "opacity",
+          "blend_mode",
+          "locked",
+          "position",
+          "size",
+          "file_ref"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique layer identifier (UUID)",
+            "pattern": "^[a-f0-9-]+$"
+          },
+          "name": {
+            "type": "string",
+            "description": "Layer name",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "type": {
+            "type": "string",
+            "description": "Layer type",
+            "enum": ["raster", "vector", "text", "group"]
+          },
+          "visible": {
+            "type": "boolean",
+            "description": "Layer visibility"
+          },
+          "opacity": {
+            "type": "number",
+            "description": "Layer opacity (0.0 to 1.0)",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "blend_mode": {
+            "type": "string",
+            "description": "Blend mode",
+            "enum": [
+              "normal",
+              "multiply",
+              "screen",
+              "overlay",
+              "darken",
+              "lighten",
+              "color-dodge",
+              "color-burn",
+              "hard-light",
+              "soft-light",
+              "difference",
+              "exclusion"
+            ]
+          },
+          "locked": {
+            "type": "boolean",
+            "description": "Edit lock status"
+          },
+          "position": {
+            "type": "object",
+            "description": "Layer position",
+            "required": ["x", "y"],
+            "properties": {
+              "x": {
+                "type": "integer",
+                "description": "X coordinate"
+              },
+              "y": {
+                "type": "integer",
+                "description": "Y coordinate"
+              }
+            }
+          },
+          "size": {
+            "type": "object",
+            "description": "Layer size",
+            "required": ["width", "height"],
+            "properties": {
+              "width": {
+                "type": "integer",
+                "description": "Width in pixels",
+                "minimum": 1
+              },
+              "height": {
+                "type": "integer",
+                "description": "Height in pixels",
+                "minimum": 1
+              }
+            }
+          },
+          "file_ref": {
+            "type": "string",
+            "description": "Relative path to layer data file"
+          }
+        }
+      }
+    },
+    "active_layer": {
+      "type": ["string", "null"],
+      "description": "Currently active layer ID"
+    },
+    "palette_id": {
+      "type": "string",
+      "description": "Active palette reference",
+      "minLength": 1
+    }
+  }
+}
