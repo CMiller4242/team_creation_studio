@@ -50,13 +50,8 @@ htmlcov/
 .tox/
 .hypothesis/
 
-# Workspace exports and temporary files
-workspace/teams/*/projects/*/exports/*
-workspace/teams/*/projects/*/working/*
-workspace/teams/*/projects/*/history/*
-!workspace/teams/*/projects/*/exports/.gitkeep
-!workspace/teams/*/projects/*/working/.gitkeep
-!workspace/teams/*/projects/*/history/.gitkeep
+# Workspace - user-generated teams and projects
+workspace/teams/
 
 # Keep workspace templates
 !workspace/templates/
