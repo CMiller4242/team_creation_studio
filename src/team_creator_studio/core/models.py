@@ -141,6 +141,7 @@ class ProjectState:
     layers: List[Layer] = field(default_factory=list)
     operations: List[OperationRecord] = field(default_factory=list)
     active_composite_path: Optional[str] = None  # Relative to project root
+    active_op_index: int = -1  # Index of active operation (-1 = none, use base layer)
 
     def update_timestamp(self):
         """Update the updated_at timestamp to now."""
@@ -157,8 +158,22 @@ class ProjectState:
         self.update_timestamp()
 
     def add_operation(self, operation: OperationRecord):
-        """Add an operation record to the project."""
+        """
+        Add an operation record to the project.
+
+        If adding after undo (active_op_index < len-1), truncates future operations.
+        Sets active_op_index to the new operation.
+        """
+        # If we're not at the end, truncate operations after current index
+        if self.active_op_index < len(self.operations) - 1:
+            self.operations = self.operations[:self.active_op_index + 1]
+
+        # Add new operation
         self.operations.append(operation)
+
+        # Set active index to the new operation
+        self.active_op_index = len(self.operations) - 1
+
         self.update_timestamp()
 
     def get_base_layer(self) -> Optional[Layer]:
@@ -179,6 +194,108 @@ class ProjectState:
                 return img
         return None
 
+    def get_operation_by_id(self, op_id: str) -> Optional[tuple[int, OperationRecord]]:
+        """
+        Find an operation by ID or ID prefix.
+
+        Args:
+            op_id: Full UUID or unique prefix (>=6 chars)
+
+        Returns:
+            Tuple of (index, operation) or None if not found
+
+        Raises:
+            ValueError: If prefix matches multiple operations
+        """
+        matches = []
+        for i, op in enumerate(self.operations):
+            if op.id == op_id or op.id.startswith(op_id):
+                matches.append((i, op))
+
+        if len(matches) == 0:
+            return None
+        elif len(matches) == 1:
+            return matches[0]
+        else:
+            raise ValueError(f"Ambiguous operation ID prefix '{op_id}' matches {len(matches)} operations")
+
+    def get_active_operation(self) -> Optional[OperationRecord]:
+        """Get the currently active operation, or None if no operations active."""
+        if self.active_op_index < 0 or self.active_op_index >= len(self.operations):
+            return None
+        return self.operations[self.active_op_index]
+
+    def can_undo(self) -> bool:
+        """Check if undo is possible."""
+        return self.active_op_index >= 0
+
+    def can_redo(self) -> bool:
+        """Check if redo is possible."""
+        return self.active_op_index < len(self.operations) - 1
+
+    def undo(self) -> bool:
+        """
+        Move to previous operation in the stack.
+
+        Returns:
+            True if undo was performed, False if nothing to undo
+        """
+        if not self.can_undo():
+            return False
+
+        self.active_op_index -= 1
+        self.update_timestamp()
+        return True
+
+    def redo(self) -> bool:
+        """
+        Move to next operation in the stack.
+
+        Returns:
+            True if redo was performed, False if nothing to redo
+        """
+        if not self.can_redo():
+            return False
+
+        self.active_op_index += 1
+        self.update_timestamp()
+        return True
+
+    def delete_operation(self, op_index: int) -> OperationRecord:
+        """
+        Delete an operation from the stack.
+
+        Adjusts active_op_index:
+        - If deleted op index < active: decrement active by 1
+        - If deleted op index == active: set active to previous (index-1), or -1 if none
+        - If deleted op index > active: no change to active
+
+        Args:
+            op_index: Index of operation to delete
+
+        Returns:
+            The deleted operation record
+
+        Raises:
+            IndexError: If op_index is out of range
+        """
+        if op_index < 0 or op_index >= len(self.operations):
+            raise IndexError(f"Operation index {op_index} out of range")
+
+        deleted_op = self.operations.pop(op_index)
+
+        # Adjust active_op_index
+        if op_index < self.active_op_index:
+            # Deleted operation before active: shift active down
+            self.active_op_index -= 1
+        elif op_index == self.active_op_index:
+            # Deleted the active operation: move to previous
+            self.active_op_index = op_index - 1
+        # If op_index > active_op_index: no change needed
+
+        self.update_timestamp()
+        return deleted_op
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -192,11 +309,31 @@ class ProjectState:
             "layers": [layer.to_dict() for layer in self.layers],
             "operations": [op.to_dict() for op in self.operations],
             "active_composite_path": self.active_composite_path,
+            "active_op_index": self.active_op_index,
         }
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "ProjectState":
-        """Create from dictionary."""
+        """
+        Create from dictionary with migration support.
+
+        Handles missing active_op_index for Milestone 2 projects.
+        """
+        operations = [
+            OperationRecord.from_dict(op) for op in data.get("operations", [])
+        ]
+
+        # Migrate: infer active_op_index if not present
+        if "active_op_index" not in data:
+            if operations:
+                # Old project with operations: set to last operation
+                active_op_index = len(operations) - 1
+            else:
+                # No operations: -1 (use base layer)
+                active_op_index = -1
+        else:
+            active_op_index = data["active_op_index"]
+
         return ProjectState(
             team_name=data["team_name"],
             team_slug=data["team_slug"],
@@ -208,10 +345,9 @@ class ProjectState:
                 SourceImage.from_dict(img) for img in data.get("source_images", [])
             ],
             layers=[Layer.from_dict(layer) for layer in data.get("layers", [])],
-            operations=[
-                OperationRecord.from_dict(op) for op in data.get("operations", [])
-            ],
+            operations=operations,
             active_composite_path=data.get("active_composite_path"),
+            active_op_index=active_op_index,
         )
 
     def save(self, project_path: Path):
