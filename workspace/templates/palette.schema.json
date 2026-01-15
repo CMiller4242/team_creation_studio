@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://teamcreatorstudio.example.com/schemas/palette.schema.json",
+  "title": "Color Palette",
+  "description": "Schema for Team Creation Studio color palettes",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "created_at",
+    "colors"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique palette identifier",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "name": {
+      "type": "string",
+      "description": "Palette name",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO 8601 timestamp (UTC) of creation",
+      "format": "date-time"
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional palette description",
+      "maxLength": 500
+    },
+    "colors": {
+      "type": "array",
+      "description": "Color definitions",
+      "items": {
+        "type": "object",
+        "required": ["name", "hex", "rgb"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Color name",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "hex": {
+            "type": "string",
+            "description": "Hex color code (e.g., #FF0000)",
+            "pattern": "^#[0-9A-Fa-f]{6}$"
+          },
+          "rgb": {
+            "type": "array",
+            "description": "RGB values [0-255, 0-255, 0-255]",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "hsv": {
+            "type": "array",
+            "description": "Optional HSV values [0-360, 0-100, 0-100]",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "cmyk": {
+            "type": "array",
+            "description": "Optional CMYK values [0-100, 0-100, 0-100, 0-100]",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        }
+      }
+    }
+  }
+}
