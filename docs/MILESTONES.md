@@ -45,7 +45,7 @@ python -m team_creator_studio create-project --team "Team Name" --project "Proje
 
 ---
 
-## Milestone 2: Editor Core - Image Load & Non-Destructive Color Replace ✅ (Current)
+## Milestone 2: Editor Core - Image Load & Non-Destructive Color Replace ✅
 
 **Status:** Complete
 **Goal:** Implement first real editing pipeline (headless CLI)
@@ -190,29 +190,184 @@ python -m team_creator_studio project-info \
 
 ---
 
-## Milestone 3: CLI Enhancements
+## Milestone 3: Operation Management & Undo/Redo ✅ (Current)
 
-**Status:** Planned
-**Goal:** Expand CLI functionality for workspace management
+**Status:** Complete
+**Goal:** Add operation stack management, undo/redo, and project maintenance commands
 
 ### Deliverables
 
-- [ ] List teams command
-- [ ] List projects command
-- [ ] Delete team/project commands (with confirmation)
-- [ ] Search functionality (find teams/projects)
-- [ ] Workspace statistics
-- [ ] Configuration management (set workspace path)
-- [ ] Export/import team structure
-- [ ] Undo last operation
-- [ ] Clear project history
+- [x] Operation stack model with active_op_index
+- [x] Undo/redo functionality
+- [x] List teams command
+- [x] List projects command
+- [x] List operations command with active marker
+- [x] Delete operation command
+- [x] Reset project command
+- [x] Metadata validation and auto-repair system
+- [x] Migration support for Milestone 2 projects
 
-### Technical Requirements
+### Technical Stack
 
-- Implement workspace querying
-- Add JSON reading utilities
-- Table formatting for list outputs
-- Confirmation prompts for destructive operations
+- Pattern A: active_op_index (-1 = base layer, 0+ = operation index)
+- Append-only operation history
+- Non-destructive undo/redo (re-uses existing operation outputs)
+- Automatic project state validation and repair
+
+### New Commands
+
+```bash
+# List all teams
+python -m team_creator_studio list-teams
+
+# List projects for a team
+python -m team_creator_studio list-projects --team "Team Name"
+
+# List operations with active marker
+python -m team_creator_studio list-ops --team "Team Name" --project "Project Name"
+
+# Undo last operation
+python -m team_creator_studio undo --team "Team Name" --project "Project Name"
+
+# Redo next operation
+python -m team_creator_studio redo --team "Team Name" --project "Project Name"
+
+# Delete operation by ID (full or prefix >= 6 chars)
+python -m team_creator_studio delete-op \
+  --team "Team Name" \
+  --project "Project Name" \
+  --id "abc123"
+
+# Reset project (preserves source uploads)
+python -m team_creator_studio reset-project \
+  --team "Team Name" \
+  --project "Project Name"
+```
+
+### Key Features
+
+**Undo/Redo Stack**
+- Operations stored as append-only history
+- `active_op_index` tracks current state (-1 to len-1)
+- Undo: decrements index, re-renders from previous op
+- Redo: increments index, re-renders from next op
+- Adding operation after undo: truncates future operations (standard behavior)
+
+**Operation Management**
+- List operations with type, parameters, timestamps
+- Active operation marked with `*`
+- Delete by full UUID or unique prefix (>=6 chars)
+- Safe deletion with active_op_index adjustment
+
+**Project Reset**
+- Deletes working/, layers/, masks/, history/ contents
+- Preserves source_uploads/ (original images)
+- Resets operations to empty, active_op_index to -1
+- Requires confirmation prompt
+
+**Validation & Repair**
+- Auto-detects and fixes invalid active_op_index
+- Migrates Milestone 2 projects (adds active_op_index)
+- Validates operation output files exist
+- Normalizes paths to relative
+- Re-renders composite if missing/invalid
+
+### Technical Implementation
+
+**Operation Stack Model (Pattern A)**
+```python
+class ProjectState:
+    operations: List[OperationRecord]  # Full history
+    active_op_index: int  # -1 or 0..len-1
+
+    # -1: No operations applied (use base layer)
+    # 0: Apply first operation only
+    # N: Apply operations 0 through N
+```
+
+**Undo/Redo Behavior**
+- `can_undo()`: Returns True if active_op_index >= 0
+- `can_redo()`: Returns True if active_op_index < len(operations) - 1
+- Undo sets active_op_index -= 1, triggers re-render
+- Redo sets active_op_index += 1, triggers re-render
+- No re-processing: uses existing operation output files
+
+**Delete Operation Logic**
+```
+If deleted_index < active_index:
+    active_index -= 1  # Shift down
+If deleted_index == active_index:
+    active_index = deleted_index - 1  # Move to previous
+If deleted_index > active_index:
+    # No change to active_index
+```
+
+**Validation System**
+- Called at start of every command that loads project state
+- Automatically repairs common issues
+- Saves repaired state if changes made
+- Prints repair actions when verbose=True
+
+### Migration
+
+**Milestone 2 → Milestone 3:**
+- Projects without `active_op_index` auto-migrated
+- If operations exist: set to `len(operations) - 1`
+- If no operations: set to `-1`
+- No manual intervention required
+
+### Success Criteria
+
+- ✅ list-teams shows all teams with metadata
+- ✅ list-projects shows projects for a team
+- ✅ list-ops displays operations with active marker
+- ✅ Undo moves backwards through operation history
+- ✅ Redo moves forward through operation history
+- ✅ Adding operation after undo truncates redo stack
+- ✅ delete-op removes record and file, adjusts active_op_index
+- ✅ reset-project preserves sources, deletes derived files
+- ✅ Validation auto-repairs missing/invalid active_op_index
+- ✅ Milestone 2 projects automatically migrated
+- ✅ Renderer respects active_op_index
+- ✅ All existing commands still work
+
+### Example Workflows
+
+**Undo/Redo Workflow:**
+```bash
+# Import and apply two color replacements
+python -m team_creator_studio import-image --team "Team" --project "Logo" --path "logo.png"
+python -m team_creator_studio color-replace --team "Team" --project "Logo" --target "#FFF" --new "#0F0" --tolerance 10
+python -m team_creator_studio color-replace --team "Team" --project "Logo" --target "#000" --new "#00F" --tolerance 10
+
+# List operations (active_op_index = 1)
+python -m team_creator_studio list-ops --team "Team" --project "Logo"
+# Output:
+# Idx  Active  ID         Type           ...
+# 0            abc12345   color_replace  ...
+# 1    *       def67890   color_replace  ...
+
+# Undo to first color replacement
+python -m team_creator_studio undo --team "Team" --project "Logo"
+# active_op_index now 0
+
+# Apply different operation (truncates operation 1)
+python -m team_creator_studio color-replace --team "Team" --project "Logo" --target "#000" --new "#F00" --tolerance 5
+# Operations: [0, new_2], active_op_index = 1
+```
+
+**Project Cleanup:**
+```bash
+# List operations to find ID
+python -m team_creator_studio list-ops --team "Team" --project "Logo"
+
+# Delete specific operation
+python -m team_creator_studio delete-op --team "Team" --project "Logo" --id "abc123"
+
+# Or reset entire project
+python -m team_creator_studio reset-project --team "Team" --project "Logo"
+# Confirms before deletion
+```
 
 ---
 
@@ -471,9 +626,9 @@ python -m team_creator_studio project-info \
 
 We welcome contributions to any milestone. Priority areas:
 
-1. **Current Focus**: Milestone 3 (CLI enhancements)
-2. **High Impact**: Milestone 4 (GUI foundation)
-3. **Future Work**: Milestones 5+ (in order)
+1. **Current Focus**: Milestone 4 (GUI foundation)
+2. **High Impact**: Milestone 5 (Canvas & Layer System)
+3. **Future Work**: Milestones 6+ (in order)
 
 ### How to Contribute
 
@@ -510,5 +665,5 @@ For milestone planning questions or suggestions, please:
 ---
 
 **Last Updated:** 2026-01-15
-**Current Milestone:** 2 (Complete - Editor Core)
-**Next Milestone:** 3 (CLI Enhancements)
+**Current Milestone:** 3 (Complete - Operation Management & Undo/Redo)
+**Next Milestone:** 4 (GUI Foundation)

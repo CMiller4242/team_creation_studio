@@ -15,9 +15,9 @@ def render_project(project_state: ProjectState, project_path: Path) -> Path:
     """
     Render the current project state to a composite image.
 
-    Current implementation (Milestone 2):
-    - If operations exist, use the last operation output as composite
-    - Otherwise, use the base layer image
+    Milestone 3: Respects active_op_index for undo/redo:
+    - If active_op_index == -1: use base layer
+    - If active_op_index >= 0: use operation at that index
     - Future: Support multiple layers with blending
 
     Args:
@@ -31,22 +31,34 @@ def render_project(project_state: ProjectState, project_path: Path) -> Path:
         ValueError: If project has no layers or images
         FileNotFoundError: If required image files don't exist
     """
-    # Determine source image for composite
+    # Determine source image for composite based on active_op_index
     composite_source = None
 
-    # Priority 1: Use last operation output if available
-    if project_state.operations:
-        last_op = project_state.operations[-1]
-        composite_source = project_path / last_op.output_path
+    # Case 1: active_op_index points to an operation
+    if project_state.active_op_index >= 0 and project_state.active_op_index < len(project_state.operations):
+        active_op = project_state.operations[project_state.active_op_index]
+        composite_source = project_path / active_op.output_path
 
-    # Priority 2: Use base layer
+        if not composite_source.exists():
+            raise FileNotFoundError(
+                f"Operation output missing: {active_op.output_path}. "
+                f"Cannot render composite for operation at index {project_state.active_op_index}."
+            )
+
+    # Case 2: active_op_index == -1 or no operations: use base layer
     elif project_state.layers:
         base_layer = project_state.get_base_layer()
         if base_layer:
             composite_source = project_path / base_layer.layer_path
 
+            if not composite_source.exists():
+                raise FileNotFoundError(
+                    f"Base layer missing: {base_layer.layer_path}. "
+                    f"Cannot render composite."
+                )
+
     # No source available
-    if not composite_source or not composite_source.exists():
+    if not composite_source:
         raise ValueError(
             "Cannot render project: no operations or layers with valid images"
         )
