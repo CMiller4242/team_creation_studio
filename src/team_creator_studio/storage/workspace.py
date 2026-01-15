@@ -136,7 +136,7 @@ class WorkspaceManager:
         project_slug: str
     ) -> None:
         """
-        Write project.json metadata file.
+        Write project.json metadata file using ProjectState model.
 
         Args:
             project_path: Path to project directory
@@ -145,32 +145,15 @@ class WorkspaceManager:
             team_slug: Team slug
             project_slug: Project slug
         """
-        meta_path = project_path / "meta" / "project.json"
+        from team_creator_studio.core.models import ProjectState
 
-        project_metadata = {
-            "name": project_name,
-            "slug": project_slug,
-            "team": {
-                "name": team_name,
-                "slug": team_slug
-            },
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "updated_at": datetime.utcnow().isoformat() + "Z",
-            "version": "1.0",
-            "description": "",
-            "tags": [],
-            "canvas": {
-                "width": 1024,
-                "height": 1024,
-                "background_color": "#FFFFFF"
-            },
-            "layers": [],
-            "active_layer": None,
-            "palette_id": "default"
-        }
+        # Create new project state
+        project_state = ProjectState.create_new(
+            team_name, team_slug, project_name, project_slug
+        )
 
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(project_metadata, f, indent=2, ensure_ascii=False)
+        # Save to meta/project.json
+        project_state.save(project_path)
 
     def _write_initial_palette(self, project_path: Path) -> None:
         """
@@ -236,3 +219,21 @@ class WorkspaceManager:
         if project_path.exists():
             return project_path
         return None
+
+    def ensure_project_exists(self, team_name: str, project_name: str) -> Path:
+        """
+        Ensure project exists, creating it if necessary.
+
+        Args:
+            team_name: Human-readable team name
+            project_name: Human-readable project name
+
+        Returns:
+            Path: Path to project directory
+        """
+        project_path = self.get_project_path(team_name, project_name)
+
+        if project_path is None:
+            project_path = self.create_project(team_name, project_name)
+
+        return project_path
