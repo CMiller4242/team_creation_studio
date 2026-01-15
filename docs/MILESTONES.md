@@ -2,7 +2,7 @@
 
 This document outlines the development roadmap for Team Creation Studio, breaking the project into manageable milestones with clear deliverables.
 
-## Milestone 1: Foundation & Scaffold ✅ (Current)
+## Milestone 1: Foundation & Scaffold ✅
 
 **Status:** Complete
 **Duration:** Initial implementation
@@ -45,7 +45,152 @@ python -m team_creator_studio create-project --team "Team Name" --project "Proje
 
 ---
 
-## Milestone 2: CLI Enhancements
+## Milestone 2: Editor Core - Image Load & Non-Destructive Color Replace ✅ (Current)
+
+**Status:** Complete
+**Goal:** Implement first real editing pipeline (headless CLI)
+
+### Deliverables
+
+- [x] Add Pillow dependency for image processing
+- [x] Core data models (ProjectState, SourceImage, Layer, OperationRecord)
+- [x] Image I/O primitives (load/save with RGBA conversion)
+- [x] Color parsing utilities (hex, RGB, validation)
+- [x] Non-destructive color replacement operation
+- [x] Project rendering and compositing system
+- [x] Import image into project
+- [x] Apply color replace operations
+- [x] Export project to PNG
+- [x] Display project information
+
+### Technical Stack
+
+- Python 3.10+
+- Pillow (10.0+) for image processing
+- NumPy (via Pillow) for efficient color operations
+- Euclidean distance for color matching
+
+### New Commands
+
+```bash
+# Import an image into a project
+python -m team_creator_studio import-image \
+  --team "Team Name" \
+  --project "Project Name" \
+  --path "/path/to/image.png"
+
+# Replace a color (with tolerance)
+python -m team_creator_studio color-replace \
+  --team "Team Name" \
+  --project "Project Name" \
+  --target "#FFFFFF" \
+  --new "#9CFF00" \
+  --tolerance 25 \
+  --preserve-alpha true
+
+# Export final result
+python -m team_creator_studio export \
+  --team "Team Name" \
+  --project "Project Name" \
+  --name "output_filename" \
+  --format png
+
+# View project details
+python -m team_creator_studio project-info \
+  --team "Team Name" \
+  --project "Project Name"
+```
+
+### Key Features
+
+**Non-Destructive Operations**
+- Operations are append-only in project history
+- Each operation creates new output file
+- Original images never modified
+- Operations can be replayed/analyzed
+
+**Color Replacement Algorithm**
+- Euclidean distance in RGB space
+- Configurable tolerance (0-255)
+- Preserves alpha channel by default
+- Vectorized with NumPy for performance
+
+**Project State Management**
+- JSON-serialized project metadata
+- Tracks source images, layers, operations
+- Relative paths for portability
+- Timestamps for all changes
+
+### Technical Implementation
+
+**Module Structure:**
+```
+src/team_creator_studio/
+├── core/
+│   ├── models.py         # Data models (ProjectState, Layer, etc.)
+│   └── renderer.py       # Compositing system
+├── imaging/
+│   ├── io.py            # Image load/save
+│   └── color.py         # Color parsing and conversion
+├── ops/
+│   └── color_replace.py # Color replacement operation
+└── storage/
+    └── workspace.py     # Updated with ProjectState support
+```
+
+**Data Flow:**
+1. Import: Copy to source_uploads/ → Create SourceImage → Create Layer in working/
+2. Operation: Load input → Apply operation → Save to working/ops/ → Create OperationRecord
+3. Render: Composite from last operation or base layer → Save to working/composite.png
+4. Export: Copy composite to exports/ with proper naming
+
+### Success Criteria
+
+- ✅ Image import works with any PNG
+- ✅ Color replace correctly identifies and replaces colors within tolerance
+- ✅ Alpha channel preserved for transparent images
+- ✅ Operations recorded in project.json
+- ✅ Composite rendered after each operation
+- ✅ Export creates game-ready PNG
+- ✅ project-info displays complete project state
+- ✅ All paths stored as relative (portable)
+
+### Example Workflow
+
+```bash
+# Create project and import logo
+python -m team_creator_studio create-project \
+  --team "Pembroke Dominion" \
+  --project "Logo Recolor"
+
+python -m team_creator_studio import-image \
+  --team "Pembroke Dominion" \
+  --project "Logo Recolor" \
+  --path "logo_white.png"
+
+# Replace white with green
+python -m team_creator_studio color-replace \
+  --team "Pembroke Dominion" \
+  --project "Logo Recolor" \
+  --target "#FFFFFF" \
+  --new "#00FF00" \
+  --tolerance 10
+
+# Export result
+python -m team_creator_studio export \
+  --team "Pembroke Dominion" \
+  --project "Logo Recolor" \
+  --name "logo_green"
+
+# Check project status
+python -m team_creator_studio project-info \
+  --team "Pembroke Dominion" \
+  --project "Logo Recolor"
+```
+
+---
+
+## Milestone 3: CLI Enhancements
 
 **Status:** Planned
 **Goal:** Expand CLI functionality for workspace management
@@ -55,22 +200,12 @@ python -m team_creator_studio create-project --team "Team Name" --project "Proje
 - [ ] List teams command
 - [ ] List projects command
 - [ ] Delete team/project commands (with confirmation)
-- [ ] Project info display
 - [ ] Search functionality (find teams/projects)
 - [ ] Workspace statistics
 - [ ] Configuration management (set workspace path)
 - [ ] Export/import team structure
-
-### New Commands
-
-```bash
-python -m team_creator_studio list-teams
-python -m team_creator_studio list-projects --team "Team Name"
-python -m team_creator_studio info --team "Team Name" --project "Project Name"
-python -m team_creator_studio search "keyword"
-python -m team_creator_studio delete-project --team "Team Name" --project "Project Name"
-python -m team_creator_studio stats
-```
+- [ ] Undo last operation
+- [ ] Clear project history
 
 ### Technical Requirements
 
@@ -81,7 +216,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 3: GUI Foundation
+## Milestone 4: GUI Foundation
 
 **Status:** Planned
 **Goal:** Create desktop application shell with basic UI
@@ -129,7 +264,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 4: Canvas & Layer System
+## Milestone 5: Canvas & Layer System
 
 **Status:** Planned
 **Goal:** Implement core canvas rendering and layer management
@@ -163,7 +298,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 5: Basic Drawing Tools
+## Milestone 6: Basic Drawing Tools
 
 **Status:** Planned
 **Goal:** Implement fundamental drawing and painting tools
@@ -189,7 +324,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 6: Transform & Selection Tools
+## Milestone 7: Transform & Selection Tools
 
 **Status:** Planned
 **Goal:** Add transform operations and selection tools
@@ -215,7 +350,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 7: Export Pipeline
+## Milestone 8: Export Pipeline
 
 **Status:** Planned
 **Goal:** Implement comprehensive export functionality
@@ -241,7 +376,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 8: AI-Powered Features (Optional)
+## Milestone 9: AI-Powered Features (Optional)
 
 **Status:** Future
 **Goal:** Integrate AI tools for enhanced productivity
@@ -272,7 +407,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 9: Collaboration Features
+## Milestone 10: Collaboration Features
 
 **Status:** Future
 **Goal:** Enable team collaboration and asset sharing
@@ -290,7 +425,7 @@ python -m team_creator_studio stats
 
 ---
 
-## Milestone 10: Polish & Release
+## Milestone 11: Polish & Release
 
 **Status:** Future
 **Goal:** Prepare for public release
@@ -313,7 +448,7 @@ python -m team_creator_studio stats
 ## Long-Term Vision
 
 ### Year 1
-- Complete Milestones 1-7
+- Complete Milestones 1-8
 - Stable 1.0 release
 - Active user community
 - Regular bug fix releases
@@ -336,9 +471,9 @@ python -m team_creator_studio stats
 
 We welcome contributions to any milestone. Priority areas:
 
-1. **Current Focus**: Milestone 2 (CLI enhancements)
-2. **High Impact**: Milestone 3 (GUI foundation)
-3. **Future Work**: Milestones 4+ (in order)
+1. **Current Focus**: Milestone 3 (CLI enhancements)
+2. **High Impact**: Milestone 4 (GUI foundation)
+3. **Future Work**: Milestones 5+ (in order)
 
 ### How to Contribute
 
@@ -375,5 +510,5 @@ For milestone planning questions or suggestions, please:
 ---
 
 **Last Updated:** 2026-01-15
-**Current Milestone:** 1 (Complete)
-**Next Milestone:** 2 (CLI Enhancements)
+**Current Milestone:** 2 (Complete - Editor Core)
+**Next Milestone:** 3 (CLI Enhancements)

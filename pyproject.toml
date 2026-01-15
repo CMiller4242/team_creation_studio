@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "team-creator-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Photoshop-like editor for creating game-ready assets"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,10 @@ classifiers = [
     "Operating System :: OS Independent",
     "Topic :: Multimedia :: Graphics :: Editors",
 ]
-dependencies = []
+dependencies = [
+    "Pillow>=10.0.0",
+    "numpy>=1.24.0",
+]
 
 [project.optional-dependencies]
 dev = [
