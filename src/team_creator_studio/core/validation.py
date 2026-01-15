@@ -74,7 +74,38 @@ def validate_and_repair_project_state(
                 )
                 break
 
-    # 3. Validate composite path
+    # 3. Infer canvas size from first layer if not set or invalid (Milestone 5)
+    if project_state.canvas_width <= 0 or project_state.canvas_height <= 0:
+        if project_state.layers:
+            # Try to infer from first layer
+            first_layer = project_state.layers[0]
+            layer_bitmap_path = project_path / first_layer.layer_path
+            if layer_bitmap_path.exists():
+                try:
+                    from team_creator_studio.imaging.io import get_image_info
+                    info = get_image_info(layer_bitmap_path)
+                    if info:
+                        old_width = project_state.canvas_width
+                        old_height = project_state.canvas_height
+                        project_state.canvas_width = info["width"]
+                        project_state.canvas_height = info["height"]
+                        repairs.append(
+                            f"Inferred canvas size from first layer: {old_width}x{old_height} -> "
+                            f"{project_state.canvas_width}x{project_state.canvas_height}"
+                        )
+                except Exception as e:
+                    repairs.append(f"Warning: Could not infer canvas size: {e}")
+
+    # 4. Normalize layer order
+    if project_state.layers:
+        # Check if all orders are the same (likely old format)
+        orders = [layer.order for layer in project_state.layers]
+        if len(set(orders)) == 1 and len(orders) > 1:
+            # All the same order, reassign
+            project_state.normalize_layer_order()
+            repairs.append(f"Normalized layer order for {len(project_state.layers)} layers")
+
+    # 5. Validate composite path
     needs_composite_update = False
     if project_state.active_composite_path:
         composite_abs = project_path / project_state.active_composite_path
@@ -92,7 +123,7 @@ def validate_and_repair_project_state(
     if needs_composite_update:
         repairs.append("Composite needs re-rendering")
 
-    # 4. Validate paths are relative
+    # 6. Validate paths are relative
     # Check source images
     for img in project_state.source_images:
         if Path(img.original_path).is_absolute():
@@ -128,7 +159,7 @@ def validate_and_repair_project_state(
             except ValueError:
                 repairs.append(f"Warning: Operation path outside project: {op.output_path}")
 
-    # 5. Update timestamp if repairs were made
+    # 7. Update timestamp if repairs were made
     if repairs:
         project_state.update_timestamp()
 

@@ -53,6 +53,9 @@ class Layer:
     visible: bool
     opacity: float  # 0.0 to 1.0
     blend_mode: str  # "normal", etc.
+    order: int  # Layer order (lower = bottom, higher = top)
+    x: int  # X position on canvas
+    y: int  # Y position on canvas
 
     @staticmethod
     def create(
@@ -63,6 +66,9 @@ class Layer:
         visible: bool = True,
         opacity: float = 1.0,
         blend_mode: str = "normal",
+        order: int = 0,
+        x: int = 0,
+        y: int = 0,
     ) -> "Layer":
         """Create a new Layer with generated UUID."""
         return Layer(
@@ -74,6 +80,9 @@ class Layer:
             visible=visible,
             opacity=opacity,
             blend_mode=blend_mode,
+            order=order,
+            x=x,
+            y=y,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -82,7 +91,18 @@ class Layer:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "Layer":
-        """Create from dictionary."""
+        """Create from dictionary with migration support."""
+        # Migrate: add missing fields with defaults
+        if "order" not in data:
+            data["order"] = 0
+        if "x" not in data:
+            data["x"] = 0
+        if "y" not in data:
+            data["y"] = 0
+        if "opacity" not in data:
+            data["opacity"] = 1.0
+        if "visible" not in data:
+            data["visible"] = True
         return Layer(**data)
 
 
@@ -95,7 +115,8 @@ class OperationRecord:
     params: Dict[str, Any]  # Operation-specific parameters
     created_at: str  # ISO 8601 timestamp
     input_layer_id: str
-    output_path: str  # Relative to project root
+    output_path: str  # Relative to project root (legacy, kept for compatibility)
+    output_layer_path: Optional[str] = None  # Path to the updated layer bitmap
     note: Optional[str] = None
 
     @staticmethod
@@ -104,6 +125,7 @@ class OperationRecord:
         params: Dict[str, Any],
         input_layer_id: str,
         output_path: str,
+        output_layer_path: Optional[str] = None,
         note: Optional[str] = None,
     ) -> "OperationRecord":
         """Create a new OperationRecord with generated UUID and timestamp."""
@@ -114,6 +136,7 @@ class OperationRecord:
             created_at=datetime.utcnow().isoformat() + "Z",
             input_layer_id=input_layer_id,
             output_path=output_path,
+            output_layer_path=output_layer_path,
             note=note,
         )
 
@@ -123,7 +146,12 @@ class OperationRecord:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "OperationRecord":
-        """Create from dictionary."""
+        """Create from dictionary with migration support."""
+        # Migrate: output_layer_path is optional
+        if "output_layer_path" not in data:
+            data["output_layer_path"] = None
+        if "note" not in data:
+            data["note"] = None
         return OperationRecord(**data)
 
 
@@ -142,6 +170,10 @@ class ProjectState:
     operations: List[OperationRecord] = field(default_factory=list)
     active_composite_path: Optional[str] = None  # Relative to project root
     active_op_index: int = -1  # Index of active operation (-1 = none, use base layer)
+    canvas_width: int = 1024  # Canvas width in pixels
+    canvas_height: int = 1024  # Canvas height in pixels
+    canvas_background: str = "transparent"  # Background color/style
+    canvas_dpi: Optional[int] = None  # Optional DPI setting
 
     def update_timestamp(self):
         """Update the updated_at timestamp to now."""
@@ -296,6 +328,141 @@ class ProjectState:
         self.update_timestamp()
         return deleted_op
 
+    def get_sorted_layers(self) -> List[Layer]:
+        """Get layers sorted by order (ascending)."""
+        return sorted(self.layers, key=lambda l: l.order)
+
+    def get_layer_index(self, layer_id: str) -> Optional[int]:
+        """Get the index of a layer in the layers list."""
+        for i, layer in enumerate(self.layers):
+            if layer.id == layer_id:
+                return i
+        return None
+
+    def move_layer_up(self, layer_id: str) -> bool:
+        """
+        Move a layer up in the stack (increase order).
+        Returns True if moved, False if already at top or not found.
+        """
+        layer = self.get_layer_by_id(layer_id)
+        if not layer:
+            return False
+
+        sorted_layers = self.get_sorted_layers()
+        current_pos = next((i for i, l in enumerate(sorted_layers) if l.id == layer_id), None)
+
+        if current_pos is None or current_pos == len(sorted_layers) - 1:
+            # Layer not found or already at top
+            return False
+
+        # Swap order with next layer
+        next_layer = sorted_layers[current_pos + 1]
+        layer.order, next_layer.order = next_layer.order, layer.order
+
+        self.update_timestamp()
+        return True
+
+    def move_layer_down(self, layer_id: str) -> bool:
+        """
+        Move a layer down in the stack (decrease order).
+        Returns True if moved, False if already at bottom or not found.
+        """
+        layer = self.get_layer_by_id(layer_id)
+        if not layer:
+            return False
+
+        sorted_layers = self.get_sorted_layers()
+        current_pos = next((i for i, l in enumerate(sorted_layers) if l.id == layer_id), None)
+
+        if current_pos is None or current_pos == 0:
+            # Layer not found or already at bottom
+            return False
+
+        # Swap order with previous layer
+        prev_layer = sorted_layers[current_pos - 1]
+        layer.order, prev_layer.order = prev_layer.order, layer.order
+
+        self.update_timestamp()
+        return True
+
+    def delete_layer(self, layer_id: str) -> Optional[Layer]:
+        """
+        Delete a layer from the project.
+        Returns the deleted layer or None if not found.
+        """
+        index = self.get_layer_index(layer_id)
+        if index is None:
+            return None
+
+        deleted_layer = self.layers.pop(index)
+        self.update_timestamp()
+        return deleted_layer
+
+    def set_layer_visibility(self, layer_id: str, visible: bool) -> bool:
+        """
+        Set layer visibility.
+        Returns True if changed, False if not found.
+        """
+        layer = self.get_layer_by_id(layer_id)
+        if not layer:
+            return False
+
+        layer.visible = visible
+        self.update_timestamp()
+        return True
+
+    def set_layer_opacity(self, layer_id: str, opacity: float) -> bool:
+        """
+        Set layer opacity (clamped to 0.0-1.0).
+        Returns True if changed, False if not found.
+        """
+        layer = self.get_layer_by_id(layer_id)
+        if not layer:
+            return False
+
+        # Clamp opacity to valid range
+        layer.opacity = max(0.0, min(1.0, opacity))
+        self.update_timestamp()
+        return True
+
+    def set_layer_position(self, layer_id: str, x: int, y: int) -> bool:
+        """
+        Set layer position on canvas.
+        Returns True if changed, False if not found.
+        """
+        layer = self.get_layer_by_id(layer_id)
+        if not layer:
+            return False
+
+        layer.x = x
+        layer.y = y
+        self.update_timestamp()
+        return True
+
+    def rename_layer(self, layer_id: str, name: str) -> bool:
+        """
+        Rename a layer.
+        Returns True if changed, False if not found.
+        """
+        layer = self.get_layer_by_id(layer_id)
+        if not layer:
+            return False
+
+        layer.name = name
+        self.update_timestamp()
+        return True
+
+    def normalize_layer_order(self):
+        """Normalize layer order values to 0, 1, 2, ..., n-1 based on current ordering."""
+        sorted_layers = self.get_sorted_layers()
+        for i, layer in enumerate(sorted_layers):
+            layer.order = i
+        self.update_timestamp()
+
+    def get_visible_layer_count(self) -> int:
+        """Get the count of visible layers."""
+        return sum(1 for layer in self.layers if layer.visible)
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -310,6 +477,10 @@ class ProjectState:
             "operations": [op.to_dict() for op in self.operations],
             "active_composite_path": self.active_composite_path,
             "active_op_index": self.active_op_index,
+            "canvas_width": self.canvas_width,
+            "canvas_height": self.canvas_height,
+            "canvas_background": self.canvas_background,
+            "canvas_dpi": self.canvas_dpi,
         }
 
     @staticmethod
@@ -318,10 +489,14 @@ class ProjectState:
         Create from dictionary with migration support.
 
         Handles missing active_op_index for Milestone 2 projects.
+        Handles missing canvas settings for Milestone 4 projects.
+        Handles missing layer order/position/opacity for Milestone 4 projects.
         """
         operations = [
             OperationRecord.from_dict(op) for op in data.get("operations", [])
         ]
+
+        layers = [Layer.from_dict(layer) for layer in data.get("layers", [])]
 
         # Migrate: infer active_op_index if not present
         if "active_op_index" not in data:
@@ -334,7 +509,35 @@ class ProjectState:
         else:
             active_op_index = data["active_op_index"]
 
-        return ProjectState(
+        # Migrate: infer canvas settings if not present
+        canvas_width = data.get("canvas_width")
+        canvas_height = data.get("canvas_height")
+
+        if canvas_width is None or canvas_height is None:
+            # Infer from first image if available
+            if layers:
+                # Try to infer from first layer's source image
+                # For now, use default; validation will correct this later
+                canvas_width = 1024
+                canvas_height = 1024
+            else:
+                # No layers yet, use default
+                canvas_width = 1024
+                canvas_height = 1024
+
+        canvas_background = data.get("canvas_background", "transparent")
+        canvas_dpi = data.get("canvas_dpi")
+
+        # Migrate: normalize layer order if needed
+        if layers:
+            # Ensure all layers have order set (Layer.from_dict already handles defaults)
+            # Normalize to 0, 1, 2, ... based on current list order
+            for i, layer in enumerate(layers):
+                if layer.order == 0 and i > 0:
+                    # Likely all orders are 0 (old format), reassign
+                    layer.order = i
+
+        project_state = ProjectState(
             team_name=data["team_name"],
             team_slug=data["team_slug"],
             project_name=data["project_name"],
@@ -344,11 +547,17 @@ class ProjectState:
             source_images=[
                 SourceImage.from_dict(img) for img in data.get("source_images", [])
             ],
-            layers=[Layer.from_dict(layer) for layer in data.get("layers", [])],
+            layers=layers,
             operations=operations,
             active_composite_path=data.get("active_composite_path"),
             active_op_index=active_op_index,
+            canvas_width=canvas_width,
+            canvas_height=canvas_height,
+            canvas_background=canvas_background,
+            canvas_dpi=canvas_dpi,
         )
+
+        return project_state
 
     def save(self, project_path: Path):
         """Save project state to meta/project.json."""
