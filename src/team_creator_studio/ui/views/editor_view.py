@@ -117,6 +117,14 @@ class EditorView(ttk.Frame):
         color_panel = ttk.LabelFrame(self, text="Color Replace", padding=theme.PADDING_MEDIUM)
         color_panel.pack(fill="x", padx=theme.PADDING_MEDIUM, pady=theme.PADDING_SMALL)
 
+        # Target layer indicator
+        target_layer_frame = ttk.Frame(color_panel)
+        target_layer_frame.pack(fill="x", pady=theme.PADDING_SMALL)
+
+        ttk.Label(target_layer_frame, text="Target Layer:", width=12).pack(side="left")
+        self.target_layer_label = ttk.Label(target_layer_frame, text="(No layer selected)", foreground=theme.TEXT_SECONDARY)
+        self.target_layer_label.pack(side="left", padx=theme.PADDING_SMALL)
+
         # Target color row
         target_frame = ttk.Frame(color_panel)
         target_frame.pack(fill="x", pady=theme.PADDING_SMALL)
@@ -181,12 +189,13 @@ class EditorView(ttk.Frame):
         ).pack(side="left")
 
         # Apply button
-        apply_button = ttk.Button(
+        self.apply_button = ttk.Button(
             color_panel,
             text="Apply Color Replace",
-            command=self._on_apply_color_replace_clicked
+            command=self._on_apply_color_replace_clicked,
+            state=tk.DISABLED  # Disabled until a layer is selected
         )
-        apply_button.pack(fill="x", pady=(theme.PADDING_MEDIUM, 0))
+        self.apply_button.pack(fill="x", pady=(theme.PADDING_MEDIUM, 0))
 
     def _on_import_clicked(self):
         """Handle import button click."""
@@ -335,3 +344,17 @@ class EditorView(ttk.Frame):
             text=message,
             foreground=theme.ERROR_COLOR if error else theme.TEXT_SECONDARY
         )
+
+    def set_target_layer(self, layer_name: Optional[str]):
+        """
+        Set the target layer name for color replace operations.
+
+        Args:
+            layer_name: Name of the target layer, or None if no layer selected
+        """
+        if layer_name:
+            self.target_layer_label.config(text=layer_name, foreground=theme.TEXT_PRIMARY)
+            self.apply_button.config(state=tk.NORMAL)
+        else:
+            self.target_layer_label.config(text="(No layer selected)", foreground=theme.TEXT_SECONDARY)
+            self.apply_button.config(state=tk.DISABLED)

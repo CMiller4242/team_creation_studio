@@ -595,37 +595,375 @@ python -m team_creator_studio color-replace \
 
 ---
 
-## Milestone 5: Canvas & Layer System
+## Milestone 5: Canvas & Real Layer System ✅
 
-**Status:** Planned
-**Goal:** Implement core canvas rendering and layer management
+**Status:** Complete
+**Goal:** Implement multi-layer compositing with canvas settings and comprehensive layer management
 
 ### Deliverables
 
-- [ ] Canvas rendering engine
-- [ ] Layer panel
-- [ ] Layer creation (raster/vector/text)
-- [ ] Layer visibility toggle
-- [ ] Layer opacity control
-- [ ] Layer ordering (move up/down)
-- [ ] Layer renaming
-- [ ] Layer deletion
-- [ ] Active layer selection
-- [ ] Canvas zoom and pan
+- [x] Multi-layer compositing engine with visibility/opacity/positioning
+- [x] Canvas settings (width, height, background, DPI)
+- [x] Layer panel UI in GUI (three-column layout)
+- [x] Layer operations service layer
+- [x] Layer-specific operation outputs
+- [x] CLI layer management commands
+- [x] Layer visibility toggle
+- [x] Layer opacity control (0-100%)
+- [x] Layer ordering (move up/down)
+- [x] Layer positioning (x, y)
+- [x] Layer renaming
+- [x] Layer deletion with guardrails
+- [x] Active layer selection (top-most visible)
+- [x] Non-destructive per-layer operations
+- [x] Backward compatibility with Milestones 2-4
 
-### Technical Requirements
+### Technical Stack
 
-- Use QPainter for rendering
-- Implement layer compositing
-- Handle transparency correctly
-- Efficient rendering for large canvases
+- Pillow for RGBA compositing
+- NumPy for opacity alpha blending
+- Service layer pattern for shared logic
+- UUID prefix matching (>=6 chars)
+- Pattern A undo/redo with layer support
 
-### Layer Types
+### Architecture
 
-- **Raster**: Pixel-based images (PNG)
-- **Vector**: Scalable graphics (future)
-- **Text**: Editable text layers (future)
-- **Group**: Layer groups (future)
+**Enhanced Data Models**:
+```python
+class ProjectState:
+    # Canvas settings (added)
+    canvas_width: int = 1024
+    canvas_height: int = 1024
+    canvas_background: str = "transparent"
+    canvas_dpi: Optional[int] = None
+
+    # Layer management methods (added)
+    def get_sorted_layers() -> List[Layer]
+    def move_layer_up/down(layer_id) -> bool
+    def delete_layer(layer_id) -> Optional[Layer]
+    def set_layer_visibility/opacity/position(...)
+    def normalize_layer_order()
+
+class Layer:
+    # New fields
+    order: int  # Layer stacking order (0=bottom, higher=top)
+    x: int  # X position on canvas
+    y: int  # Y position on canvas
+
+class OperationRecord:
+    # Layer-specific output
+    output_layer_path: Optional[str]  # e.g., "working/layers/<layer_id>/<op_id>_color_replace.png"
+```
+
+**Service Layer** (`core/services.py`):
+New methods for layer management:
+- `resolve_layer_id(project_state, layer_id)` - Select active layer or resolve ID
+- `add_layer_from_image(team, project, image_path, name)` - Add layer with auto-ordering
+- `set_layer_visibility(team, project, layer_id, visible)` - Toggle visibility
+- `set_layer_opacity(team, project, layer_id, opacity)` - Set 0.0-1.0 opacity
+- `set_layer_position(team, project, layer_id, x, y)` - Reposition layer
+- `rename_layer(team, project, layer_id, name)` - Rename layer
+- `move_layer(team, project, layer_id, direction)` - Move up/down
+- `delete_layer(team, project, layer_id)` - Delete with guardrail
+- `apply_color_replace_to_layer(...)` - Layer-specific operations
+
+**Renderer** (`core/renderer.py`):
+Complete rewrite for multi-layer compositing:
+```python
+def render_project(project_state, project_path):
+    # Create transparent RGBA canvas
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
+
+    # Composite layers bottom-to-top
+    for layer in get_sorted_layers():
+        if not layer.visible:
+            continue
+
+        # Load layer bitmap (respects active_op_index)
+        layer_image = get_layer_bitmap_path(project_state, layer, project_path)
+
+        # Apply opacity via NumPy alpha blending
+        if layer.opacity < 1.0:
+            # Multiply alpha channel by opacity
+
+        # Paste at (x, y) position with alpha compositing
+        canvas.paste(layer_image, (layer.x, layer.y), layer_image)
+
+    # Save to working/composite.png
+```
+
+**UI Structure**:
+```
+src/team_creator_studio/ui/
+├── views/
+│   ├── layers_panel.py  # NEW: Layers management panel
+│   └── editor_view.py   # Updated: Target layer indicator
+└── app.py               # Updated: Three-column layout, layer callbacks
+```
+
+**Three-Column Layout**:
+```
+┌─────────────┬────────────────────────┬──────────────┐
+│  Browser    │     Editor             │  Layers      │
+│  (Teams &   │  [Toolbar]             │  Panel       │
+│  Projects)  │  ┌──────────────────┐  │              │
+│             │  │  Image Viewer    │  │  Layers List │
+│             │  │  (composite)     │  │  ┌────────┐  │
+│             │  └──────────────────┘  │  │☑ Layer1│  │
+│             │  Color Replace Panel:  │  │☐ Layer2│  │
+│             │  Target Layer: <name>  │  └────────┘  │
+│             │  [Target/New colors]   │  [Add] [Del] │
+│             │  [Apply] (disabled     │  [Up] [Down] │
+│             │   if no layer)         │              │
+│             │                        │  Properties: │
+│             │                        │  Name: [   ] │
+│             │                        │  Opacity: 50 │
+│             │                        │  Pos: X Y    │
+└─────────────┴────────────────────────┴──────────────┘
+```
+
+### New CLI Commands
+
+```bash
+# Add layer from image
+python -m team_creator_studio add-layer \
+  --team "Team" --project "Project" \
+  --path "/path/to/image.png" \
+  --name "Logo Layer"
+
+# List all layers
+python -m team_creator_studio layers \
+  --team "Team" --project "Project"
+# Output:
+# Order  ID        Name           Visible  Opacity  X     Y
+# 2      abc12345  Logo Layer     Yes      100%     0     0
+# 1      def67890  Background     Yes      80%      0     0
+# 0      ghi24680  Base           Yes      100%     0     0
+
+# Set layer properties
+python -m team_creator_studio set-layer \
+  --team "Team" --project "Project" \
+  --layer-id "abc123" \
+  --visible true \
+  --opacity 75 \
+  --x 100 --y 50 \
+  --name "New Name"
+
+# Move layer in stack
+python -m team_creator_studio move-layer \
+  --team "Team" --project "Project" \
+  --layer-id "abc123" \
+  --direction up
+
+# Delete layer
+python -m team_creator_studio delete-layer \
+  --team "Team" --project "Project" \
+  --layer-id "abc123"
+
+# Apply operation to specific layer
+python -m team_creator_studio color-replace \
+  --team "Team" --project "Project" \
+  --target "#FFF" --new "#0F0" \
+  --tolerance 10 \
+  --layer-id "abc123"  # NEW: Optional layer targeting
+```
+
+### Key Features
+
+**Multi-Layer Compositing**
+- Bottom-to-top layer stacking with integer order
+- Per-layer visibility toggle (show/hide)
+- Per-layer opacity (0-100%, applied to alpha channel)
+- Per-layer positioning (x, y coordinates)
+- Alpha blending with NumPy for performance
+- Transparent RGBA canvas
+
+**Layer Management**
+- Add layer: Uploads image, assigns order = max+1
+- Delete layer: Guardrail prevents deleting last layer
+- Move up/down: Swaps order, normalizes gaps
+- Rename: In-place name change (no re-render)
+- Set properties: Visibility, opacity, position (all trigger re-render)
+
+**Active Layer Selection**
+- Top-most visible layer selected by default
+- Falls back to highest order if none visible
+- Operations apply to active layer unless --layer-id specified
+- GUI shows "Target Layer: <name>" in color replace panel
+
+**Layer-Specific Operations**
+- Operations save to `working/layers/<layer_id>/<op_id>_<type>.png`
+- `OperationRecord.output_layer_path` tracks layer-specific outputs
+- Renderer finds latest operation output per layer via `active_op_index`
+- Undo/redo works correctly with layer operations
+
+**Canvas Settings**
+- Width, height (default 1024x1024)
+- Background color (default transparent)
+- DPI metadata (optional)
+- Auto-inferred from first layer if not set
+
+**Layers Panel (GUI)**
+- Scrollable layers list (top to bottom)
+- Visibility checkbox per layer
+- Click layer name to select
+- Selected layer highlighted
+- Controls: Add Layer (file dialog), Delete Layer (with confirmation), Move Up, Move Down
+- Properties panel: Name entry + Rename button, Opacity slider (0-100) with value label, X/Y position fields + Apply button
+- Auto-updates on all operations
+
+### Migration & Compatibility
+
+**Automatic Migration**:
+- Projects without canvas settings: infer from first layer image
+- Projects with single layer at order=0: works unchanged
+- Projects without layer order: normalized to 0, 1, 2...
+- Legacy operations without `output_layer_path`: uses `output_path`
+
+**Backward Compatibility**:
+- All Milestone 2-4 projects load and work correctly
+- Validation auto-repairs missing layer properties
+- Single-layer projects continue working as before
+- CLI commands from previous milestones unchanged (except color-replace gains optional --layer-id)
+
+### Technical Implementation
+
+**Layer Resolution Logic**:
+```python
+def resolve_layer_id(project_state, layer_id=None):
+    if layer_id:
+        # Exact match or prefix (>=6 chars)
+        return matched_layer.id
+
+    # Choose active layer
+    sorted_layers = get_sorted_layers()  # Bottom to top
+    visible_layers = [l for l in sorted_layers if l.visible]
+
+    if visible_layers:
+        return visible_layers[-1].id  # Top-most visible
+    else:
+        return sorted_layers[-1].id  # Highest order
+```
+
+**Get Layer Bitmap Path**:
+```python
+def get_layer_bitmap_path(project_state, layer, project_path):
+    # Find latest operation for this layer up to active_op_index
+    latest_op_path = None
+
+    for i in range(project_state.active_op_index + 1):
+        op = project_state.operations[i]
+        if op.input_layer_id == layer.id:
+            latest_op_path = op.output_layer_path or op.output_path
+
+    # Use operation output if found, otherwise layer's original path
+    return latest_op_path or layer.layer_path
+```
+
+**Opacity Application**:
+```python
+# NumPy-based alpha blending
+if layer.opacity < 1.0:
+    r, g, b, a = layer_image.split()
+    alpha_array = np.array(a, dtype=np.float32)
+    alpha_array = alpha_array * layer.opacity  # Multiply by 0.0-1.0
+    a = Image.fromarray(alpha_array.astype(np.uint8), mode='L')
+    layer_image = Image.merge("RGBA", (r, g, b, a))
+```
+
+**Layer Deletion Guardrail**:
+```python
+def delete_layer(self, team, project, layer_id):
+    project_state, project_path = self.load_project(team, project)
+
+    if len(project_state.layers) == 1:
+        raise ValueError("Cannot delete the last remaining layer")
+
+    # Delete layer, remove associated operations, delete working files
+    # Re-render composite
+```
+
+### Success Criteria
+
+- ✅ Multi-layer projects render correctly with visibility/opacity/position
+- ✅ Add layer uploads image and assigns next order
+- ✅ Delete layer removes layer + operations + working files
+- ✅ Cannot delete last remaining layer
+- ✅ Move up/down swaps order correctly
+- ✅ Rename layer works without re-rendering
+- ✅ Set opacity/position triggers re-render
+- ✅ Visibility toggle shows/hides layers in composite
+- ✅ Active layer auto-selected (top-most visible)
+- ✅ Layer operations save to layer-specific paths
+- ✅ Renderer respects active_op_index for each layer
+- ✅ Undo/redo works with layer operations
+- ✅ GUI layers panel lists all layers (scrollable)
+- ✅ GUI layer selection updates properties panel
+- ✅ GUI shows "Target Layer" in color replace panel
+- ✅ GUI disables Apply if no layer selected
+- ✅ CLI layers command lists all layers
+- ✅ CLI layer commands support UUID prefix matching
+- ✅ Milestone 2-4 projects load and work correctly
+- ✅ Validation auto-repairs canvas settings and layer order
+
+### Example Workflow
+
+**Multi-Layer Workflow (CLI)**:
+```bash
+# Create project
+python -m team_creator_studio create-project --team "Team" --project "Game Logo"
+
+# Add base layer
+python -m team_creator_studio add-layer --team "Team" --project "Game Logo" --path "background.png" --name "Background"
+
+# Add logo layer
+python -m team_creator_studio add-layer --team "Team" --project "Game Logo" --path "logo.png" --name "Logo"
+
+# List layers
+python -m team_creator_studio layers --team "Team" --project "Game Logo"
+# Order  ID        Name        Visible  Opacity  X  Y
+# 1      def123    Logo        Yes      100%     0  0
+# 0      abc456    Background  Yes      100%     0  0
+
+# Apply color replace to logo layer only
+python -m team_creator_studio color-replace \
+  --team "Team" --project "Game Logo" \
+  --target "#FFFFFF" --new "#00FF00" \
+  --tolerance 10 \
+  --layer-id "def123"
+
+# Adjust logo layer opacity
+python -m team_creator_studio set-layer \
+  --team "Team" --project "Game Logo" \
+  --layer-id "def123" \
+  --opacity 80
+
+# Position logo layer
+python -m team_creator_studio set-layer \
+  --team "Team" --project "Game Logo" \
+  --layer-id "def123" \
+  --x 100 --y 50
+
+# Export composite
+python -m team_creator_studio export --team "Team" --project "Game Logo" --name "logo_final"
+```
+
+**Multi-Layer Workflow (GUI)**:
+```
+1. Launch: python -m team_creator_studio gui
+2. Select team and project (or create new)
+3. Click "Add Layer" → Select background.png
+4. Click "Add Layer" → Select logo.png
+5. Layers panel shows both layers (top to bottom)
+6. Select "Logo" layer in layers panel
+7. Editor shows "Target Layer: Logo"
+8. Enter target/new colors in color replace panel
+9. Click "Apply Color Replace" (applies to Logo layer only)
+10. Adjust opacity slider in layers panel → 80%
+11. Change position X=100, Y=50 → Click "Apply Position"
+12. Composite updates automatically
+13. Click "Export" to save final image
+```
 
 ---
 
@@ -802,9 +1140,9 @@ python -m team_creator_studio color-replace \
 
 We welcome contributions to any milestone. Priority areas:
 
-1. **Current Focus**: Milestone 4 (GUI foundation)
-2. **High Impact**: Milestone 5 (Canvas & Layer System)
-3. **Future Work**: Milestones 6+ (in order)
+1. **Current Focus**: Milestone 6 (Basic Drawing Tools)
+2. **High Impact**: Milestone 7 (Transform & Selection Tools)
+3. **Future Work**: Milestones 8+ (in order)
 
 ### How to Contribute
 
@@ -840,6 +1178,6 @@ For milestone planning questions or suggestions, please:
 
 ---
 
-**Last Updated:** 2026-01-15
-**Current Milestone:** 4 (Complete - GUI Foundation with Tkinter)
-**Next Milestone:** 5 (Canvas & Layer System)
+**Last Updated:** 2026-01-16
+**Current Milestone:** 5 (Complete - Canvas & Real Layer System)
+**Next Milestone:** 6 (Basic Drawing Tools)
