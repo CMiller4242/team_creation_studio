@@ -15,6 +15,7 @@ from team_creator_studio.core.services import ProjectService
 from team_creator_studio.ui import theme
 from team_creator_studio.ui.views.project_browser import ProjectBrowser
 from team_creator_studio.ui.views.editor_view import EditorView
+from team_creator_studio.ui.views.layers_panel import LayersPanel
 
 
 class TeamCreationStudioApp:
@@ -39,6 +40,7 @@ class TeamCreationStudioApp:
         # Current state
         self.current_team_name = None
         self.current_project_name = None
+        self.selected_layer_id = None
 
         # Configure styles
         self._configure_styles()
@@ -62,7 +64,7 @@ class TeamCreationStudioApp:
 
     def _create_ui(self):
         """Create the main UI layout."""
-        # Create main container with two panes
+        # Create main container with three panes (browser | editor | layers)
         main_container = ttk.PanedWindow(self.root, orient="horizontal")
         main_container.pack(fill="both", expand=True)
 
@@ -78,7 +80,7 @@ class TeamCreationStudioApp:
         # Configure browser width
         self.browser.configure(width=theme.LIST_WIDTH)
 
-        # Right pane: Editor
+        # Center pane: Editor
         self.editor = EditorView(
             main_container,
             on_import=self._on_import_image,
@@ -89,6 +91,27 @@ class TeamCreationStudioApp:
             on_apply_color_replace=self._on_apply_color_replace
         )
         main_container.add(self.editor, weight=1)
+
+        # Right pane: Layers panel
+        self.layers_panel = LayersPanel(
+            main_container,
+            on_layer_selected=self._on_layer_selected,
+            on_add_layer=self._on_add_layer,
+            on_delete_layer=self._on_delete_layer,
+            on_move_up=self._on_move_layer_up,
+            on_move_down=self._on_move_layer_down,
+            on_rename=self._on_rename_layer,
+            on_opacity_changed=self._on_opacity_changed,
+            on_position_changed=self._on_position_changed,
+            on_visibility_toggled=self._on_visibility_toggled,
+        )
+        main_container.add(self.layers_panel, weight=0)
+
+        # Configure layers panel width
+        self.layers_panel.configure(width=300)
+
+        # Disable layers panel until project is opened
+        self.layers_panel.set_enabled(False)
 
         # Bind browser team selection to load projects
         self.browser.teams_listbox.bind("<<ListboxSelect>>", self._on_team_selected)
@@ -168,6 +191,29 @@ class TeamCreationStudioApp:
             # Update status
             self.editor.set_status(f"Project: {project_name} | Team: {team_name}")
 
+            # Enable and populate layers panel
+            self.layers_panel.set_enabled(True)
+            sorted_layers = project_state.get_sorted_layers()
+            self.layers_panel.set_layers(sorted_layers)
+
+            # Select default layer (top-most visible or highest order)
+            if sorted_layers:
+                visible_layers = [l for l in sorted_layers if l.visible]
+                if visible_layers:
+                    default_layer = visible_layers[-1]  # Top-most visible
+                else:
+                    default_layer = sorted_layers[-1]  # Highest order
+
+                self.selected_layer_id = default_layer.id
+                self.layers_panel.selected_layer_id = default_layer.id
+                self.layers_panel._update_properties_panel()
+
+                # Update editor target layer
+                self.editor.set_target_layer(default_layer.name)
+            else:
+                self.selected_layer_id = None
+                self.editor.set_target_layer(None)
+
             # Load and display composite image
             self._refresh_image()
 
@@ -176,7 +222,7 @@ class TeamCreationStudioApp:
             messagebox.showerror("Error", f"Failed to open project: {e}")
 
     def _on_import_image(self):
-        """Handle import image button."""
+        """Handle import image button (legacy - use Add Layer instead)."""
         if not self.current_project_name or not self.current_team_name:
             messagebox.showwarning("No Project", "Please open a project first.")
             return
@@ -207,8 +253,8 @@ class TeamCreationStudioApp:
 
             self.editor.set_status(f"Image imported: {source_image.filename}")
 
-            # Refresh display
-            self._refresh_image()
+            # Refresh display and layers
+            self._refresh_ui()
 
             messagebox.showinfo("Success", f"Image imported successfully:\n{source_image.filename}")
 
@@ -222,6 +268,10 @@ class TeamCreationStudioApp:
             messagebox.showwarning("No Project", "Please open a project first.")
             return
 
+        if not self.selected_layer_id:
+            messagebox.showwarning("No Layer Selected", "Please select a layer first.")
+            return
+
         if not target or not new:
             messagebox.showwarning("Invalid Input", "Please enter both target and new colors.")
             return
@@ -229,17 +279,18 @@ class TeamCreationStudioApp:
         try:
             self.editor.set_status("Applying color replace...")
 
-            # Apply operation via service
-            operation = self.service.apply_color_replace_operation(
+            # Apply operation to selected layer via service
+            project_state = self.service.apply_color_replace_to_layer(
                 self.current_team_name,
                 self.current_project_name,
                 target,
                 new,
                 tolerance,
-                preserve_alpha
+                preserve_alpha,
+                self.selected_layer_id
             )
 
-            self.editor.set_status(f"Color replace applied (ID: {operation.id[:8]})")
+            self.editor.set_status(f"Color replace applied to layer")
 
             # Refresh display
             self._refresh_image()
@@ -373,6 +424,320 @@ class TeamCreationStudioApp:
         except Exception as e:
             self.editor.set_status("Error exporting", error=True)
             messagebox.showerror("Error", f"Failed to export: {e}")
+
+    # Layer operation callbacks
+
+    def _on_layer_selected(self, layer_id: str):
+        """Handle layer selection."""
+        self.selected_layer_id = layer_id
+
+        # Update editor target layer label
+        try:
+            result = self.service.load_project(self.current_team_name, self.current_project_name)
+            if result:
+                project_state, _ = result
+                layer = project_state.get_layer_by_id(layer_id)
+                if layer:
+                    self.editor.set_target_layer(layer.name)
+                else:
+                    self.editor.set_target_layer(None)
+        except Exception:
+            pass
+
+    def _on_add_layer(self):
+        """Handle Add Layer button."""
+        if not self.current_project_name or not self.current_team_name:
+            messagebox.showwarning("No Project", "Please open a project first.")
+            return
+
+        # Open file dialog
+        file_path = filedialog.askopenfilename(
+            title="Select Image for New Layer",
+            filetypes=[
+                ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
+                ("PNG files", "*.png"),
+                ("JPEG files", "*.jpg *.jpeg"),
+                ("All files", "*.*")
+            ]
+        )
+
+        if not file_path:
+            return
+
+        # Ask for layer name
+        layer_name = simpledialog.askstring(
+            "Layer Name",
+            "Enter layer name (leave empty for default):",
+            parent=self.root
+        )
+
+        if layer_name == "":
+            layer_name = None
+
+        try:
+            self.editor.set_status("Adding layer...")
+
+            # Add layer via service
+            project_state = self.service.add_layer_from_image(
+                self.current_team_name,
+                self.current_project_name,
+                Path(file_path),
+                layer_name
+            )
+
+            self.editor.set_status("Layer added successfully")
+
+            # Refresh UI
+            self._refresh_ui()
+
+            messagebox.showinfo("Success", "Layer added successfully.")
+
+        except Exception as e:
+            self.editor.set_status("Error adding layer", error=True)
+            messagebox.showerror("Error", f"Failed to add layer: {e}")
+
+    def _on_delete_layer(self, layer_id: str):
+        """Handle Delete Layer button."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        # Confirm deletion
+        confirm = messagebox.askyesno(
+            "Confirm Delete",
+            "Are you sure you want to delete this layer?\nThis action cannot be undone."
+        )
+
+        if not confirm:
+            return
+
+        try:
+            self.editor.set_status("Deleting layer...")
+
+            # Delete layer via service
+            project_state = self.service.delete_layer(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id
+            )
+
+            self.editor.set_status("Layer deleted successfully")
+
+            # Refresh UI
+            self._refresh_ui()
+
+            messagebox.showinfo("Success", "Layer deleted successfully.")
+
+        except ValueError as e:
+            self.editor.set_status("Error deleting layer", error=True)
+            messagebox.showerror("Error", str(e))
+        except Exception as e:
+            self.editor.set_status("Error deleting layer", error=True)
+            messagebox.showerror("Error", f"Failed to delete layer: {e}")
+
+    def _on_move_layer_up(self, layer_id: str):
+        """Handle Move Up button."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            self.editor.set_status("Moving layer up...")
+
+            # Move layer via service
+            project_state = self.service.move_layer(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id,
+                "up"
+            )
+
+            self.editor.set_status("Layer moved up")
+
+            # Refresh UI
+            self._refresh_ui()
+
+        except ValueError as e:
+            self.editor.set_status("Cannot move layer", error=True)
+            messagebox.showwarning("Info", str(e))
+        except Exception as e:
+            self.editor.set_status("Error moving layer", error=True)
+            messagebox.showerror("Error", f"Failed to move layer: {e}")
+
+    def _on_move_layer_down(self, layer_id: str):
+        """Handle Move Down button."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            self.editor.set_status("Moving layer down...")
+
+            # Move layer via service
+            project_state = self.service.move_layer(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id,
+                "down"
+            )
+
+            self.editor.set_status("Layer moved down")
+
+            # Refresh UI
+            self._refresh_ui()
+
+        except ValueError as e:
+            self.editor.set_status("Cannot move layer", error=True)
+            messagebox.showwarning("Info", str(e))
+        except Exception as e:
+            self.editor.set_status("Error moving layer", error=True)
+            messagebox.showerror("Error", f"Failed to move layer: {e}")
+
+    def _on_rename_layer(self, layer_id: str, new_name: str):
+        """Handle Rename button."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            self.editor.set_status("Renaming layer...")
+
+            # Rename layer via service
+            project_state = self.service.rename_layer(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id,
+                new_name
+            )
+
+            self.editor.set_status("Layer renamed successfully")
+
+            # Refresh layers panel (no re-render needed)
+            result = self.service.load_project(self.current_team_name, self.current_project_name)
+            if result:
+                project_state, _ = result
+                sorted_layers = project_state.get_sorted_layers()
+                self.layers_panel.set_layers(sorted_layers)
+
+                # Update editor target layer if this is the selected layer
+                if layer_id == self.selected_layer_id:
+                    self.editor.set_target_layer(new_name)
+
+        except Exception as e:
+            self.editor.set_status("Error renaming layer", error=True)
+            messagebox.showerror("Error", f"Failed to rename layer: {e}")
+
+    def _on_opacity_changed(self, layer_id: str, opacity: float):
+        """Handle Apply Opacity button."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            self.editor.set_status("Setting layer opacity...")
+
+            # Set opacity via service
+            project_state = self.service.set_layer_opacity(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id,
+                opacity
+            )
+
+            self.editor.set_status("Layer opacity updated")
+
+            # Refresh image only (no need to reload layers panel)
+            self._refresh_image()
+
+        except Exception as e:
+            self.editor.set_status("Error setting opacity", error=True)
+            messagebox.showerror("Error", f"Failed to set opacity: {e}")
+
+    def _on_position_changed(self, layer_id: str, x: int, y: int):
+        """Handle Apply Position button."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            self.editor.set_status("Setting layer position...")
+
+            # Set position via service
+            project_state = self.service.set_layer_position(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id,
+                x,
+                y
+            )
+
+            self.editor.set_status("Layer position updated")
+
+            # Refresh image only (no need to reload layers panel)
+            self._refresh_image()
+
+        except Exception as e:
+            self.editor.set_status("Error setting position", error=True)
+            messagebox.showerror("Error", f"Failed to set position: {e}")
+
+    def _on_visibility_toggled(self, layer_id: str, visible: bool):
+        """Handle visibility checkbox toggle."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            # Set visibility via service
+            project_state = self.service.set_layer_visibility(
+                self.current_team_name,
+                self.current_project_name,
+                layer_id,
+                visible
+            )
+
+            # Refresh image only (no need to reload layers panel)
+            self._refresh_image()
+
+        except Exception as e:
+            self.editor.set_status("Error toggling visibility", error=True)
+            messagebox.showerror("Error", f"Failed to toggle visibility: {e}")
+
+    def _refresh_ui(self):
+        """Refresh both image display and layers panel."""
+        if not self.current_project_name or not self.current_team_name:
+            return
+
+        try:
+            # Reload project state
+            result = self.service.load_project(self.current_team_name, self.current_project_name)
+            if not result:
+                return
+
+            project_state, _ = result
+
+            # Refresh layers panel
+            sorted_layers = project_state.get_sorted_layers()
+            self.layers_panel.set_layers(sorted_layers)
+
+            # Refresh image
+            self._refresh_image()
+
+            # Re-select layer if it still exists
+            if self.selected_layer_id:
+                layer = project_state.get_layer_by_id(self.selected_layer_id)
+                if layer:
+                    self.layers_panel.selected_layer_id = self.selected_layer_id
+                    self.layers_panel._update_properties_panel()
+                    self.editor.set_target_layer(layer.name)
+                else:
+                    # Layer was deleted, select default
+                    if sorted_layers:
+                        visible_layers = [l for l in sorted_layers if l.visible]
+                        if visible_layers:
+                            default_layer = visible_layers[-1]
+                        else:
+                            default_layer = sorted_layers[-1]
+
+                        self.selected_layer_id = default_layer.id
+                        self.layers_panel.selected_layer_id = default_layer.id
+                        self.layers_panel._update_properties_panel()
+                        self.editor.set_target_layer(default_layer.name)
+
+        except Exception as e:
+            self.editor.set_status("Error refreshing UI", error=True)
 
     def run(self):
         """Start the application main loop."""

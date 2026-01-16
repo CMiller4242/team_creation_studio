@@ -15,6 +15,7 @@ from team_creator_studio.storage.workspace import WorkspaceManager
 from team_creator_studio.core.models import ProjectState, SourceImage, Layer, OperationRecord
 from team_creator_studio.core.renderer import render_project
 from team_creator_studio.core.validation import validate_and_repair_project_state
+from team_creator_studio.core.services import ProjectService
 from team_creator_studio.imaging.io import load_image, save_png
 from team_creator_studio.imaging.color import parse_color, rgb_to_hex
 from team_creator_studio.ops.color_replace import apply_color_replace
@@ -172,10 +173,11 @@ def cmd_import_image(args):
 def cmd_color_replace(args):
     """Apply color replacement operation to a project."""
     settings = Settings()
-    manager = WorkspaceManager(settings)
+    service = ProjectService(settings)
 
     team_name = args.team
     project_name = args.project
+    layer_id = args.layer_id if hasattr(args, 'layer_id') and args.layer_id else None
 
     if not team_name or not project_name:
         print("Error: --team and --project are required", file=sys.stderr)
@@ -183,101 +185,34 @@ def cmd_color_replace(args):
 
     try:
         # Parse colors
-        target_rgb = parse_color(args.target)
-        new_rgb = parse_color(args.new)
         tolerance = args.tolerance
         preserve_alpha = args.preserve_alpha.lower() in ("true", "1", "yes")
 
-        # Get project path
-        project_path = manager.get_project_path(team_name, project_name)
-        if not project_path:
-            print(f"Error: Project not found: {team_name} / {project_name}", file=sys.stderr)
-            return 1
-
-        # Load project state
-        project_state = ProjectState.load(project_path)
-        if not project_state:
-            print("Error: Could not load project state", file=sys.stderr)
-            return 1
-
-        # Validate and repair project state
-        repairs = validate_and_repair_project_state(project_state, project_path)
-        if repairs:
-            project_state.save(project_path)
-
-        # Check if project has any layers
-        if not project_state.layers:
-            print("Error: Project has no layers. Import an image first.", file=sys.stderr)
-            print("Use: python -m team_creator_studio import-image --team \"...\" --project \"...\" --path \"...\"")
-            return 1
-
-        # Determine input image based on active_op_index
-        base_layer = project_state.get_base_layer()
-        if project_state.active_op_index >= 0:
-            # Use active operation output
-            active_op = project_state.operations[project_state.active_op_index]
-            input_path = project_path / active_op.output_path
-            input_layer_id = active_op.input_layer_id
-        else:
-            # Use base layer
-            input_path = project_path / base_layer.layer_path
-            input_layer_id = base_layer.id
-
-        if not input_path.exists():
-            print(f"Error: Input image not found: {input_path}", file=sys.stderr)
-            return 1
-
-        # Load input image
-        input_image = load_image(input_path)
-
-        # Apply color replace operation
-        result_image = apply_color_replace(
-            input_image,
-            target_rgb,
-            new_rgb,
+        # Use service layer for color replace (with layer support)
+        project_state = service.apply_color_replace_to_layer(
+            team_name,
+            project_name,
+            args.target,
+            args.new,
             tolerance,
             preserve_alpha,
+            layer_id
         )
 
-        # Save operation output
-        op_id = str(uuid.uuid4())
-        output_filename = f"{op_id}_color_replace.png"
-        output_path = project_path / "working" / "ops"
-        output_path.mkdir(exist_ok=True)
-        output_file = output_path / output_filename
-        save_png(result_image, output_file)
-
-        # Create operation record
-        operation = OperationRecord.create(
-            op_type="color_replace",
-            params={
-                "target_rgb": list(target_rgb),
-                "target_hex": rgb_to_hex(*target_rgb),
-                "new_rgb": list(new_rgb),
-                "new_hex": rgb_to_hex(*new_rgb),
-                "tolerance": tolerance,
-                "preserve_alpha": preserve_alpha,
-            },
-            input_layer_id=input_layer_id,
-            output_path=f"working/ops/{output_filename}",
-            note=f"Replace {rgb_to_hex(*target_rgb)} with {rgb_to_hex(*new_rgb)} (tolerance: {tolerance})",
-        )
-        project_state.add_operation(operation)
-
-        # Render composite
-        composite_rel_path = render_project(project_state, project_path)
-
-        # Save updated project state
-        project_state.save(project_path)
+        # Parse for output display
+        target_rgb = parse_color(args.target)
+        new_rgb = parse_color(args.new)
 
         print(f"Color replacement applied:")
         print(f"  Target: {rgb_to_hex(*target_rgb)} {target_rgb}")
         print(f"  New: {rgb_to_hex(*new_rgb)} {new_rgb}")
         print(f"  Tolerance: {tolerance}")
         print(f"  Preserve alpha: {preserve_alpha}")
-        print(f"Operation output: {output_file}")
-        print(f"Composite updated: {project_path / composite_rel_path}")
-        print(f"Project state saved: {project_path / 'meta' / 'project.json'}")
+        if layer_id:
+            print(f"  Applied to layer: {layer_id}")
+        else:
+            print(f"  Applied to active layer")
+        print(f"Project state saved")
 
         return 0
     except Exception as e:
@@ -824,6 +759,233 @@ def cmd_delete_op(args):
         return 1
 
 
+def cmd_add_layer(args):
+    """Add a new layer from an image file."""
+    settings = Settings()
+    service = ProjectService(settings)
+
+    team_name = args.team
+    project_name = args.project
+    image_path = Path(args.path)
+    layer_name = args.name if hasattr(args, 'name') and args.name else None
+
+    if not team_name or not project_name:
+        print("Error: --team and --project are required", file=sys.stderr)
+        return 1
+
+    if not image_path.exists():
+        print(f"Error: Image file not found: {image_path}", file=sys.stderr)
+        return 1
+
+    try:
+        # Add layer via service
+        project_state = service.add_layer_from_image(
+            team_name,
+            project_name,
+            image_path,
+            layer_name
+        )
+
+        # Find the newly added layer (highest order)
+        sorted_layers = project_state.get_sorted_layers()
+        new_layer = sorted_layers[-1] if sorted_layers else None
+
+        if new_layer:
+            print(f"Layer added successfully:")
+            print(f"  Name: {new_layer.name}")
+            print(f"  ID: {new_layer.id}")
+            print(f"  Order: {new_layer.order}")
+            print(f"  Visible: {new_layer.visible}")
+            print(f"  Opacity: {new_layer.opacity}")
+            print(f"  Position: ({new_layer.x}, {new_layer.y})")
+
+        return 0
+    except Exception as e:
+        print(f"Error adding layer: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_layers(args):
+    """List all layers in a project."""
+    settings = Settings()
+    manager = WorkspaceManager(settings)
+
+    team_name = args.team
+    project_name = args.project
+
+    if not team_name or not project_name:
+        print("Error: --team and --project are required", file=sys.stderr)
+        return 1
+
+    try:
+        project_path = manager.get_project_path(team_name, project_name)
+        if not project_path:
+            print(f"Project not found: {team_name} / {project_name}", file=sys.stderr)
+            return 1
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            print("Error: Could not load project state", file=sys.stderr)
+            return 1
+
+        # Validate and repair
+        repairs = validate_and_repair_project_state(project_state, project_path)
+        if repairs:
+            project_state.save(project_path)
+
+        if not project_state.layers:
+            print("No layers in project")
+            return 0
+
+        # Display layers (sorted by order, top to bottom)
+        sorted_layers = project_state.get_sorted_layers()
+
+        print(f"Layers for {project_name} ({len(sorted_layers)}):")
+        print("=" * 100)
+        print(f"{'Order':<6} {'ID':<10} {'Name':<30} {'Visible':<8} {'Opacity':<8} {'X':<6} {'Y':<6}")
+        print("-" * 100)
+
+        for layer in reversed(sorted_layers):  # Top to bottom
+            id_short = layer.id[:8]
+            visible_str = "Yes" if layer.visible else "No"
+            opacity_str = f"{int(layer.opacity * 100)}%"
+
+            print(f"{layer.order:<6} {id_short:<10} {layer.name:<30} {visible_str:<8} {opacity_str:<8} {layer.x:<6} {layer.y:<6}")
+
+        print("=" * 100)
+
+        return 0
+    except Exception as e:
+        print(f"Error listing layers: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_set_layer(args):
+    """Set layer properties."""
+    settings = Settings()
+    service = ProjectService(settings)
+
+    team_name = args.team
+    project_name = args.project
+    layer_id = args.layer_id
+
+    if not team_name or not project_name or not layer_id:
+        print("Error: --team, --project, and --layer-id are required", file=sys.stderr)
+        return 1
+
+    try:
+        # Check what properties to set
+        has_changes = False
+
+        # Set visibility
+        if hasattr(args, 'visible') and args.visible is not None:
+            visible = args.visible.lower() in ("true", "1", "yes")
+            service.set_layer_visibility(team_name, project_name, layer_id, visible)
+            print(f"Layer visibility set to: {visible}")
+            has_changes = True
+
+        # Set opacity
+        if hasattr(args, 'opacity') and args.opacity is not None:
+            opacity = float(args.opacity) / 100.0  # Convert from 0-100 to 0.0-1.0
+            service.set_layer_opacity(team_name, project_name, layer_id, opacity)
+            print(f"Layer opacity set to: {int(opacity * 100)}%")
+            has_changes = True
+
+        # Set position
+        if (hasattr(args, 'x') and args.x is not None) and (hasattr(args, 'y') and args.y is not None):
+            service.set_layer_position(team_name, project_name, layer_id, int(args.x), int(args.y))
+            print(f"Layer position set to: ({args.x}, {args.y})")
+            has_changes = True
+
+        # Rename layer
+        if hasattr(args, 'name') and args.name:
+            service.rename_layer(team_name, project_name, layer_id, args.name)
+            print(f"Layer renamed to: {args.name}")
+            has_changes = True
+
+        if not has_changes:
+            print("No changes specified. Use --visible, --opacity, --x/--y, or --name", file=sys.stderr)
+            return 1
+
+        print("Layer properties updated successfully")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error setting layer properties: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_move_layer(args):
+    """Move layer up or down in the layer stack."""
+    settings = Settings()
+    service = ProjectService(settings)
+
+    team_name = args.team
+    project_name = args.project
+    layer_id = args.layer_id
+    direction = args.direction
+
+    if not team_name or not project_name or not layer_id or not direction:
+        print("Error: --team, --project, --layer-id, and --direction are required", file=sys.stderr)
+        return 1
+
+    if direction not in ("up", "down"):
+        print("Error: --direction must be 'up' or 'down'", file=sys.stderr)
+        return 1
+
+    try:
+        project_state = service.move_layer(team_name, project_name, layer_id, direction)
+        print(f"Layer moved {direction} successfully")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error moving layer: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_delete_layer(args):
+    """Delete a layer from the project."""
+    settings = Settings()
+    service = ProjectService(settings)
+
+    team_name = args.team
+    project_name = args.project
+    layer_id = args.layer_id
+
+    if not team_name or not project_name or not layer_id:
+        print("Error: --team, --project, and --layer-id are required", file=sys.stderr)
+        return 1
+
+    try:
+        project_state = service.delete_layer(team_name, project_name, layer_id)
+        print(f"Layer deleted successfully")
+        print(f"Remaining layers: {len(project_state.layers)}")
+        return 0
+
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Error deleting layer: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def cmd_gui(args):
     """Launch the GUI application."""
     try:
@@ -1040,6 +1202,10 @@ def main():
         default="true",
         help="Preserve alpha channel (true/false, default: true)"
     )
+    parser_color_replace.add_argument(
+        "--layer-id",
+        help="Layer ID or prefix to apply operation to (optional, defaults to active layer)"
+    )
     parser_color_replace.set_defaults(func=cmd_color_replace)
 
     # export command
@@ -1193,6 +1359,144 @@ def main():
         help="Project name"
     )
     parser_reset.set_defaults(func=cmd_reset_project)
+
+    # add-layer command
+    parser_add_layer = subparsers.add_parser(
+        "add-layer",
+        help="Add a new layer from an image file"
+    )
+    parser_add_layer.add_argument(
+        "--team",
+        required=True,
+        help="Team name"
+    )
+    parser_add_layer.add_argument(
+        "--project",
+        required=True,
+        help="Project name"
+    )
+    parser_add_layer.add_argument(
+        "--path",
+        required=True,
+        help="Path to image file"
+    )
+    parser_add_layer.add_argument(
+        "--name",
+        help="Layer name (optional)"
+    )
+    parser_add_layer.set_defaults(func=cmd_add_layer)
+
+    # layers command
+    parser_layers = subparsers.add_parser(
+        "layers",
+        help="List all layers in a project"
+    )
+    parser_layers.add_argument(
+        "--team",
+        required=True,
+        help="Team name"
+    )
+    parser_layers.add_argument(
+        "--project",
+        required=True,
+        help="Project name"
+    )
+    parser_layers.set_defaults(func=cmd_layers)
+
+    # set-layer command
+    parser_set_layer = subparsers.add_parser(
+        "set-layer",
+        help="Set layer properties"
+    )
+    parser_set_layer.add_argument(
+        "--team",
+        required=True,
+        help="Team name"
+    )
+    parser_set_layer.add_argument(
+        "--project",
+        required=True,
+        help="Project name"
+    )
+    parser_set_layer.add_argument(
+        "--layer-id",
+        required=True,
+        help="Layer ID or unique prefix (>=6 chars)"
+    )
+    parser_set_layer.add_argument(
+        "--visible",
+        help="Set visibility (true/false)"
+    )
+    parser_set_layer.add_argument(
+        "--opacity",
+        type=int,
+        help="Set opacity (0-100)"
+    )
+    parser_set_layer.add_argument(
+        "--x",
+        type=int,
+        help="Set X position"
+    )
+    parser_set_layer.add_argument(
+        "--y",
+        type=int,
+        help="Set Y position"
+    )
+    parser_set_layer.add_argument(
+        "--name",
+        help="Rename layer"
+    )
+    parser_set_layer.set_defaults(func=cmd_set_layer)
+
+    # move-layer command
+    parser_move_layer = subparsers.add_parser(
+        "move-layer",
+        help="Move layer up or down in the layer stack"
+    )
+    parser_move_layer.add_argument(
+        "--team",
+        required=True,
+        help="Team name"
+    )
+    parser_move_layer.add_argument(
+        "--project",
+        required=True,
+        help="Project name"
+    )
+    parser_move_layer.add_argument(
+        "--layer-id",
+        required=True,
+        help="Layer ID or unique prefix (>=6 chars)"
+    )
+    parser_move_layer.add_argument(
+        "--direction",
+        required=True,
+        choices=["up", "down"],
+        help="Direction to move (up or down)"
+    )
+    parser_move_layer.set_defaults(func=cmd_move_layer)
+
+    # delete-layer command
+    parser_delete_layer = subparsers.add_parser(
+        "delete-layer",
+        help="Delete a layer from the project"
+    )
+    parser_delete_layer.add_argument(
+        "--team",
+        required=True,
+        help="Team name"
+    )
+    parser_delete_layer.add_argument(
+        "--project",
+        required=True,
+        help="Project name"
+    )
+    parser_delete_layer.add_argument(
+        "--layer-id",
+        required=True,
+        help="Layer ID or unique prefix (>=6 chars)"
+    )
+    parser_delete_layer.set_defaults(func=cmd_delete_layer)
 
     # gui command
     parser_gui = subparsers.add_parser(
