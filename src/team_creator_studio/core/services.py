@@ -468,3 +468,501 @@ class ProjectService:
                 return layer_path
 
         return None
+
+    def resolve_layer_id(self, project_state: ProjectState, layer_id: Optional[str] = None) -> str:
+        """
+        Resolve layer ID to use for an operation.
+
+        If layer_id is provided: validate it exists (or match by prefix if UUID)
+        If layer_id is None: choose "active layer" = top-most visible layer,
+        or highest order layer if none visible.
+
+        Args:
+            project_state: Project state
+            layer_id: Optional layer ID or prefix
+
+        Returns:
+            Resolved layer ID
+
+        Raises:
+            ValueError: If layer_id invalid or no layers available
+        """
+        if not project_state.layers:
+            raise ValueError("Project has no layers")
+
+        if layer_id:
+            # Try exact match first
+            layer = project_state.get_layer_by_id(layer_id)
+            if layer:
+                return layer.id
+
+            # Try prefix match (like operation IDs)
+            if len(layer_id) >= 6:
+                matches = [l for l in project_state.layers if l.id.startswith(layer_id)]
+                if len(matches) == 1:
+                    return matches[0].id
+                elif len(matches) > 1:
+                    raise ValueError(f"Ambiguous layer ID prefix '{layer_id}' matches {len(matches)} layers")
+
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # No layer_id provided: choose active layer
+        # Priority: top-most visible layer, else highest order layer
+        sorted_layers = project_state.get_sorted_layers()
+        visible_layers = [l for l in sorted_layers if l.visible]
+
+        if visible_layers:
+            return visible_layers[-1].id  # Top-most visible
+        elif sorted_layers:
+            return sorted_layers[-1].id  # Highest order
+        else:
+            raise ValueError("Project has no layers")
+
+    def add_layer_from_image(
+        self,
+        team_name: str,
+        project_name: str,
+        image_path: Path,
+        layer_name: Optional[str] = None
+    ) -> Tuple[ProjectState, Layer]:
+        """
+        Add a new layer from an image file.
+
+        Creates new SourceImage and Layer records, assigns order = max+1.
+
+        Args:
+            team_name: Team name
+            project_name: Project name
+            image_path: Path to image file
+            layer_name: Optional layer name (defaults to filename stem)
+
+        Returns:
+            (updated_project_state, new_layer)
+
+        Raises:
+            ValueError: If validation fails
+        """
+        if not image_path.exists():
+            raise ValueError(f"Image file not found: {image_path}")
+
+        # Get project
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        # Load project state
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Validate and repair
+        validate_and_repair_project_state(project_state, project_path)
+
+        # Generate unique filename for source
+        original_filename = image_path.name
+        base_name = image_path.stem
+        extension = image_path.suffix
+        unique_filename = original_filename
+
+        dest_path = project_path / "source_uploads" / unique_filename
+        counter = 1
+        while dest_path.exists():
+            unique_filename = f"{base_name}_{counter}{extension}"
+            dest_path = project_path / "source_uploads" / unique_filename
+            counter += 1
+
+        # Copy image to source_uploads
+        shutil.copy2(image_path, dest_path)
+
+        # Create SourceImage record
+        relative_path = f"source_uploads/{unique_filename}"
+        source_image = SourceImage.create(unique_filename, relative_path)
+        project_state.add_source_image(source_image)
+
+        # Load image and save to working directory
+        img = load_image(dest_path)
+        layer_filename = f"{source_image.id}.png"
+        layer_path = project_path / "working" / layer_filename
+        save_png(img, layer_path)
+
+        # Determine layer order (max + 1)
+        if project_state.layers:
+            max_order = max(l.order for l in project_state.layers)
+            new_order = max_order + 1
+        else:
+            new_order = 0
+
+        # Create layer
+        layer = Layer.create(
+            name=layer_name or base_name,
+            layer_type="raster",
+            layer_path=f"working/{layer_filename}",
+            source_image_id=source_image.id,
+            order=new_order,
+            x=0,
+            y=0,
+            opacity=1.0,
+            visible=True,
+        )
+        project_state.add_layer(layer)
+
+        # Render composite
+        render_project(project_state, project_path)
+
+        # Save state
+        project_state.save(project_path)
+
+        return project_state, layer
+
+    def set_layer_visibility(
+        self,
+        team_name: str,
+        project_name: str,
+        layer_id: str,
+        visible: bool
+    ) -> ProjectState:
+        """Set layer visibility and re-render."""
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Resolve layer ID
+        resolved_id = self.resolve_layer_id(project_state, layer_id)
+
+        # Set visibility
+        if not project_state.set_layer_visibility(resolved_id, visible):
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # Re-render
+        render_project(project_state, project_path)
+
+        # Save
+        project_state.save(project_path)
+
+        return project_state
+
+    def set_layer_opacity(
+        self,
+        team_name: str,
+        project_name: str,
+        layer_id: str,
+        opacity: float
+    ) -> ProjectState:
+        """Set layer opacity (0.0-1.0) and re-render."""
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Resolve layer ID
+        resolved_id = self.resolve_layer_id(project_state, layer_id)
+
+        # Set opacity (will be clamped to 0-1)
+        if not project_state.set_layer_opacity(resolved_id, opacity):
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # Re-render
+        render_project(project_state, project_path)
+
+        # Save
+        project_state.save(project_path)
+
+        return project_state
+
+    def set_layer_position(
+        self,
+        team_name: str,
+        project_name: str,
+        layer_id: str,
+        x: int,
+        y: int
+    ) -> ProjectState:
+        """Set layer position and re-render."""
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Resolve layer ID
+        resolved_id = self.resolve_layer_id(project_state, layer_id)
+
+        # Set position
+        if not project_state.set_layer_position(resolved_id, x, y):
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # Re-render
+        render_project(project_state, project_path)
+
+        # Save
+        project_state.save(project_path)
+
+        return project_state
+
+    def rename_layer(
+        self,
+        team_name: str,
+        project_name: str,
+        layer_id: str,
+        name: str
+    ) -> ProjectState:
+        """Rename a layer."""
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Resolve layer ID
+        resolved_id = self.resolve_layer_id(project_state, layer_id)
+
+        # Rename
+        if not project_state.rename_layer(resolved_id, name):
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # Save (no re-render needed for name change)
+        project_state.save(project_path)
+
+        return project_state
+
+    def move_layer(
+        self,
+        team_name: str,
+        project_name: str,
+        layer_id: str,
+        direction: str
+    ) -> ProjectState:
+        """
+        Move layer up or down in stack.
+
+        Args:
+            direction: "up" or "down"
+
+        Returns:
+            Updated project state
+
+        Raises:
+            ValueError: If invalid direction or layer not found
+        """
+        if direction not in ("up", "down"):
+            raise ValueError(f"Invalid direction: {direction}. Must be 'up' or 'down'")
+
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Resolve layer ID
+        resolved_id = self.resolve_layer_id(project_state, layer_id)
+
+        # Move layer
+        if direction == "up":
+            success = project_state.move_layer_up(resolved_id)
+        else:
+            success = project_state.move_layer_down(resolved_id)
+
+        if not success:
+            raise ValueError(f"Cannot move layer {direction} (already at {'top' if direction == 'up' else 'bottom'} or not found)")
+
+        # Normalize order
+        project_state.normalize_layer_order()
+
+        # Re-render
+        render_project(project_state, project_path)
+
+        # Save
+        project_state.save(project_path)
+
+        return project_state
+
+    def delete_layer(
+        self,
+        team_name: str,
+        project_name: str,
+        layer_id: str
+    ) -> ProjectState:
+        """
+        Delete a layer from the project.
+
+        Enforces guardrail: Cannot delete the last remaining layer.
+
+        Also removes any operations that reference this layer.
+
+        Args:
+            team_name: Team name
+            project_name: Project name
+            layer_id: Layer ID or prefix
+
+        Returns:
+            Updated project state
+
+        Raises:
+            ValueError: If trying to delete last layer or layer not found
+        """
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Resolve layer ID
+        resolved_id = self.resolve_layer_id(project_state, layer_id)
+
+        # Guardrail: Cannot delete last layer
+        if len(project_state.layers) == 1:
+            raise ValueError("Cannot delete the last remaining layer")
+
+        # Delete the layer
+        deleted_layer = project_state.delete_layer(resolved_id)
+        if not deleted_layer:
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # Remove operations that reference this layer
+        ops_to_remove = []
+        for i, op in enumerate(project_state.operations):
+            if op.input_layer_id == resolved_id:
+                ops_to_remove.append(i)
+
+        # Remove in reverse order to maintain indices
+        for i in reversed(ops_to_remove):
+            project_state.delete_operation(i)
+
+        # Delete layer's working files if they exist
+        layer_working_dir = project_path / "working" / "layers" / resolved_id
+        if layer_working_dir.exists():
+            import shutil as sh
+            sh.rmtree(layer_working_dir, ignore_errors=True)
+
+        # Re-render
+        render_project(project_state, project_path)
+
+        # Save
+        project_state.save(project_path)
+
+        return project_state
+
+    def apply_color_replace_to_layer(
+        self,
+        team_name: str,
+        project_name: str,
+        target_color: str,
+        new_color: str,
+        tolerance: int = 0,
+        preserve_alpha: bool = True,
+        layer_id: Optional[str] = None
+    ) -> Tuple[ProjectState, OperationRecord]:
+        """
+        Apply color replacement to a specific layer.
+
+        Args:
+            team_name: Team name
+            project_name: Project name
+            target_color: Target color (hex or RGB)
+            new_color: New color (hex or RGB)
+            tolerance: Color matching tolerance (0-255)
+            preserve_alpha: Whether to preserve alpha channel
+            layer_id: Target layer ID (if None, uses active layer)
+
+        Returns:
+            (updated_project_state, operation_record)
+
+        Raises:
+            ValueError: If validation fails
+        """
+        # Parse colors
+        target_rgb = parse_color(target_color)
+        new_rgb = parse_color(new_color)
+
+        # Get project
+        project_path = self.manager.get_project_path(team_name, project_name)
+        if not project_path:
+            raise ValueError(f"Project not found: {team_name} / {project_name}")
+
+        # Load project state
+        project_state = ProjectState.load(project_path)
+        if not project_state:
+            raise ValueError("Could not load project state")
+
+        # Validate and repair
+        validate_and_repair_project_state(project_state, project_path)
+
+        # Resolve layer ID
+        target_layer_id = self.resolve_layer_id(project_state, layer_id)
+        target_layer = project_state.get_layer_by_id(target_layer_id)
+
+        if not target_layer:
+            raise ValueError(f"Layer not found: {layer_id}")
+
+        # Get layer bitmap path using renderer helper
+        from team_creator_studio.core.renderer import get_layer_bitmap_path
+        input_path = get_layer_bitmap_path(project_state, target_layer, project_path)
+
+        if not input_path or not input_path.exists():
+            raise ValueError(f"Layer bitmap not found for layer: {target_layer.name}")
+
+        # Load input image
+        input_image = load_image(input_path)
+
+        # Apply color replace operation
+        result_image = apply_color_replace(
+            input_image,
+            target_rgb,
+            new_rgb,
+            tolerance,
+            preserve_alpha,
+        )
+
+        # Save operation output to layer-specific directory
+        op_id = str(uuid.uuid4())
+        output_filename = f"{op_id}_color_replace.png"
+
+        # Create layer-specific output directory
+        layer_output_dir = project_path / "working" / "layers" / target_layer_id
+        layer_output_dir.mkdir(parents=True, exist_ok=True)
+
+        output_file = layer_output_dir / output_filename
+        save_png(result_image, output_file)
+
+        # Create operation record with output_layer_path
+        output_layer_path = f"working/layers/{target_layer_id}/{output_filename}"
+
+        operation = OperationRecord.create(
+            op_type="color_replace",
+            params={
+                "target_rgb": list(target_rgb),
+                "target_hex": rgb_to_hex(*target_rgb),
+                "new_rgb": list(new_rgb),
+                "new_hex": rgb_to_hex(*new_rgb),
+                "tolerance": tolerance,
+                "preserve_alpha": preserve_alpha,
+            },
+            input_layer_id=target_layer_id,
+            output_path=f"working/ops/{output_filename}",  # Legacy path
+            output_layer_path=output_layer_path,
+            note=f"Replace {rgb_to_hex(*target_rgb)} with {rgb_to_hex(*new_rgb)} on layer '{target_layer.name}' (tolerance: {tolerance})",
+        )
+        project_state.add_operation(operation)
+
+        # Render composite
+        render_project(project_state, project_path)
+
+        # Save updated project state
+        project_state.save(project_path)
+
+        return project_state, operation
